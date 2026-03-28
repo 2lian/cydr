@@ -1,0 +1,44 @@
+[build-system]
+requires = [
+    "setuptools>=69",
+    "wheel",
+    "Cython>=3.0,<4",
+    "numpy>=2.0,<3",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xcdrjit"
+version = "0.1.0"
+description = "Generate and cache Cython-backed XCDR1 serializers from nested Python schemas."
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    { name = "Elian Neppel" },
+]
+keywords = ["cdr", "xcdr", "cyclonedds", "cython", "serialization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Cython",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "Cython>=3.0,<4",
+    "cyclonedds-idl>=0.1.0,<0.2",
+    "numpy>=2.0,<3",
+]
+
+[tool.setuptools]
+packages = ["xcdrjit"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+xcdrjit = ["*.pxd", "*.pyx", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["archive", "bench/_generated_cython_cache", "tests/_generated_cython_cache"]

@@ -1,0 +1,24 @@
+[workspace]
+authors = ["Neppel Elian <elian.neppel@posteo.eu>"]
+channels = ["conda-forge"]
+name = "xcdrjit"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+bench-joint-state-cython = "python bench/joint_state_cython_serialization.py"
+bench-every-supported-cython = "python bench/every_supported_cython_serialization.py"
+
+[dependencies]
+python = ">=3.13.3,<3.14"
+numpy = ">=2.4.3,<3"
+pyright = ">=1.1.408,<2"
+isort = ">=8.0.1,<9"
+black = ">=26.1.0,<27"
+pytest = ">=9.0.2,<10"
+colorama = ">=0.4.6,<0.5"
+cython = ">=3.2.4,<4"
+
+[pypi-dependencies]
+cyclonedds-idl = ">=0.1.0, <0.2"
+xcdrjit = { path = ".", editable = true }
