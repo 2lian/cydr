@@ -8,6 +8,6 @@ build/
 dist/
 
 # Generated serializer caches
-.shema_cache/
+.xcdrjit_cache/
 bench/_generated_cython_cache/
 tests/_generated_cython_cache/

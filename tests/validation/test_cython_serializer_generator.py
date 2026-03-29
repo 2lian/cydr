@@ -6,13 +6,18 @@ from cyclonedds_idl import IdlStruct, types
 
 from xcdrjit import Time
 from xcdrjit.idl import (
-    CythonFieldType,
+    array,
     flatten_cython_fields,
     flatten_cython_value_list,
+    float64,
     generate_cython_serializer_code,
-    load_cython_serialize_function,
+    get_codec_for,
+    inflate_cython_value_tree,
+    int32,
+    sequence,
+    string,
+    uint32,
 )
-from ..cache import SCHEMA_CACHE_DIR
 from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT
 
 
@@ -141,8 +146,8 @@ def test_flatten_cython_fields_flattens_nested_header_schema() -> None:
         "header_stamp_nanosec",
         "header_frame_id",
     ]
-    assert flattened["header_stamp_sec"] is CythonFieldType.INT32
-    assert flattened["header_frame_id"] is CythonFieldType.STRING
+    assert flattened["header_stamp_sec"].cache_token == "int32"
+    assert flattened["header_frame_id"].cache_token == "string"
 
 
 def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> None:
@@ -184,8 +189,8 @@ def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> N
 
 def test_generate_cython_serializer_code_renders_expected_lines() -> None:
     fields = flatten_cython_fields(EVERY_SUPPORTED_SCHEMA)
-    assert fields["header_stamp_sec"] is CythonFieldType.INT32
-    assert fields["header_frame_id"] is CythonFieldType.STRING
+    assert fields["header_stamp_sec"].cache_token == "int32"
+    assert fields["header_frame_id"].cache_token == "string"
 
     serializer_name = "generated_every_supported_schema"
     source = generate_cython_serializer_code(serializer_name, EVERY_SUPPORTED_SCHEMA)
@@ -193,13 +198,46 @@ def test_generate_cython_serializer_code_renders_expected_lines() -> None:
     assert f"cpdef Py_ssize_t compute_serialized_size_{serializer_name}(" in source
     assert "pos = advance_string_field(pos, header_frame_id, align_offset)" in source
     assert "pos = write_string_field(buffer, pos, header_frame_id, align_offset)" in source
+    assert f"cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):" in source
+    assert "header_frame_id, pos = read_string_field(data, pos, align_offset)" in source
 
 
-def test_load_cython_serializer_matches_cyclone() -> None:
-    serialize = load_cython_serialize_function(
-        EVERY_SUPPORTED_SCHEMA,
-        cache_dir=SCHEMA_CACHE_DIR,
-    )
+def test_generate_cython_serializer_code_supports_arbitrary_array_lengths() -> None:
+    schema = {
+        "count": uint32,
+        "samples": array(uint32, 7),
+        "names": sequence(string),
+        "moments": array(float64, 5),
+        "header": {
+            "stamp": {
+                "sec": int32,
+                "nanosec": uint32,
+            },
+        },
+    }
+
+    source = generate_cython_serializer_code("generated_array_length_schema", schema)
+
+    assert 'require_fixed_length(samples.shape[0], 7, "samples")' in source
+    assert "read_primitive_array_object(data, pos, 7," in source
+    assert 'require_fixed_length(moments.shape[0], 5, "moments")' in source
+
+
+def test_inflate_cython_value_tree_rebuilds_nested_shape() -> None:
+    values = build_values()
+    flat_values = flatten_cython_value_list(values)
+
+    rebuilt = inflate_cython_value_tree(EVERY_SUPPORTED_SCHEMA, flat_values)
+
+    assert rebuilt["text"] == values["text"]
+    assert rebuilt["header"]["stamp"]["sec"] == values["header"]["stamp"]["sec"]
+    assert rebuilt["header"]["frame_id"] == values["header"]["frame_id"]
+    assert np.array_equal(rebuilt["float64_array"], values["float64_array"])
+    assert rebuilt["text_sequence"] == values["text_sequence"]
+
+
+def test_codec_serialize_matches_cyclone() -> None:
+    serialize = get_codec_for(EVERY_SUPPORTED_SCHEMA).serialize
     values = build_values()
     generated_bytes = bytes(serialize(values))
     cyclone_bytes = serialize_cyclone(values)
@@ -207,11 +245,52 @@ def test_load_cython_serializer_matches_cyclone() -> None:
     assert generated_bytes == cyclone_bytes
 
 
-def test_load_cython_serializer_ignores_runtime_keys_and_uses_value_order() -> None:
-    serialize = load_cython_serialize_function(
-        EVERY_SUPPORTED_SCHEMA,
-        cache_dir=SCHEMA_CACHE_DIR,
-    )
+def test_load_cython_deserializer_roundtrips_cyclone_bytes() -> None:
+    codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+    serialize = codec.serialize
+    deserialize = codec.deserialize
+    values = build_values()
+    cyclone_bytes = serialize_cyclone(values)
+    decoded = deserialize(cyclone_bytes)
+
+    assert bytes(serialize(decoded)) == cyclone_bytes
+    assert decoded["text"] == values["text"]
+    assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
+    assert np.array_equal(decoded["uint32_array"], values["uint32_array"])
+    assert decoded["text_array"] == values["text_array"]
+
+
+def test_serializer_accepts_flat_value_list() -> None:
+    serialize = get_codec_for(EVERY_SUPPORTED_SCHEMA).serialize
+    values = build_values()
+
+    generated_bytes = bytes(serialize(flatten_cython_value_list(values)))
+    cyclone_bytes = serialize_cyclone(values)
+
+    assert generated_bytes == cyclone_bytes
+
+
+def test_deserializer_supports_flat_output() -> None:
+    codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+    values = build_values()
+    payload = serialize_cyclone(values)
+
+    flat_values = codec.deserialize(payload, flat=True)
+    expected_flat_values = flatten_cython_value_list(values)
+
+    assert len(flat_values) == len(expected_flat_values)
+    for actual_value, expected_value in zip(flat_values, expected_flat_values, strict=True):
+        if isinstance(actual_value, np.ndarray) or isinstance(expected_value, np.ndarray):
+            assert isinstance(actual_value, np.ndarray)
+            assert isinstance(expected_value, np.ndarray)
+            assert actual_value.dtype == expected_value.dtype
+            assert np.array_equal(actual_value, expected_value, equal_nan=True)
+        else:
+            assert actual_value == expected_value
+
+
+def test_codec_serialize_ignores_runtime_keys_and_uses_value_order() -> None:
+    serialize = get_codec_for(EVERY_SUPPORTED_SCHEMA).serialize
     values = build_values()
     reordered_keys_same_values = {
         "a": values["boolean_value"],

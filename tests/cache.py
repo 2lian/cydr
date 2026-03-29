@@ -1,12 +1,11 @@
-"""Shared cache locations for generated serializer tests."""
+"""Shared default cache location for generated serializer tests."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from xcdrjit.idl import CYTHON_CACHE_DIR
 
 
-SCHEMA_CACHE_DIR = Path(__file__).resolve().parents[1] / ".shema_cache"
-SCHEMA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+SCHEMA_CACHE_DIR = CYTHON_CACHE_DIR
 
 
 __all__ = ["SCHEMA_CACHE_DIR"]

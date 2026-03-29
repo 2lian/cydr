@@ -4,11 +4,12 @@ Active benchmarks:
 
 - `pixi run bench-joint-state-cython`
 - `pixi run bench-every-supported-cython`
+- `pixi run bench-fixed-arrays-cython`
 
 Both benchmark scripts are written around the public runtime API:
 
-1. Define a nested schema dictionary using `CythonFieldType`.
-2. Call `load_cython_serialize_function(schema, cache_dir=...)`.
+1. Define a nested schema dictionary using primitive tokens plus `array(...)` / `sequence(...)`.
+2. Call `get_codec_for(schema)`.
 3. Build one nested runtime `dict` that mirrors the schema.
 4. Compare `bytes(serialize(values))` against `cyclonedds_idl`.
 5. Time `xcdrjit` against `idl_message.serialize()` with `timeit`.
@@ -24,6 +25,7 @@ Generated `.pyx` and compiled extension modules are cached locally under:
 
 - `bench/_generated_cython_cache/joint_state`
 - `bench/_generated_cython_cache/every_supported_schema`
+- `bench/_generated_cython_cache/fixed_arrays`
 
 So you can inspect the generated code after a benchmark run.
 

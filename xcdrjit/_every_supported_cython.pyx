@@ -5,7 +5,11 @@
 # cython: cdivision=True
 
 from cpython.bytearray cimport PyByteArray_AS_STRING
-from cpython.bytes cimport PyBytes_AS_STRING, PyBytes_GET_SIZE
+from cpython.bytes cimport (
+    PyBytes_AS_STRING,
+    PyBytes_FromStringAndSize,
+    PyBytes_GET_SIZE,
+)
 from cpython.list cimport PyList_GET_ITEM, PyList_GET_SIZE
 from libc.stdint cimport (
     int8_t,
@@ -21,6 +25,7 @@ from libc.string cimport memcpy
 
 cimport cython
 cimport numpy as cnp
+import numpy as np
 
 
 cnp.import_array()
@@ -56,6 +61,161 @@ cdef inline Py_ssize_t write_uint32_raw(
 cdef inline void write_encapsulation_header(unsigned char* buffer) noexcept:
     cdef uint32_t header = 0x00000100
     write_uint32_raw(buffer, 0, header)
+
+
+cdef inline const unsigned char* data_ptr(const unsigned char[::1] data) noexcept:
+    if data.shape[0] == 0:
+        return cython.NULL
+    return &data[0]
+
+
+cdef inline void require_available(
+    Py_ssize_t buffer_length,
+    Py_ssize_t pos,
+    Py_ssize_t byte_count,
+) except *:
+    if pos < 0 or byte_count < 0 or pos + byte_count > buffer_length:
+        raise ValueError("Buffer too short while deserializing.")
+
+
+cdef inline void require_consumed(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+) except *:
+    if pos != data.shape[0]:
+        raise ValueError("Trailing bytes after deserializing.")
+
+
+cdef inline Py_ssize_t validate_encapsulation_header(
+    const unsigned char[::1] data,
+) except -1:
+    require_available(data.shape[0], 0, ENCAPSULATION_HEADER_SIZE)
+    if data[0] != 0 or data[1] != 1 or data[2] != 0 or data[3] != 0:
+        raise ValueError("Unsupported encapsulation header.")
+    return ENCAPSULATION_HEADER_SIZE
+
+
+cdef inline uint32_t read_uint32_raw_value(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+) except? 0:
+    cdef uint32_t value = 0
+    require_available(data.shape[0], pos, cython.sizeof(uint32_t))
+    memcpy(&value, data_ptr(data) + pos, cython.sizeof(uint32_t))
+    return value
+
+
+cdef inline tuple read_aligned_scalar_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t itemsize,
+    int alignment,
+    Py_ssize_t align_offset,
+    object dtype,
+):
+    pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
+    require_available(data.shape[0], pos, itemsize)
+    return np.frombuffer(data, dtype=dtype, count=1, offset=pos)[0], pos + itemsize
+
+
+cdef inline tuple read_primitive_array_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t count,
+    Py_ssize_t itemsize,
+    int alignment,
+    Py_ssize_t align_offset,
+    object dtype,
+):
+    cdef Py_ssize_t byte_count = count * itemsize
+    if count > 0:
+        pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
+        require_available(data.shape[0], pos, byte_count)
+        return np.frombuffer(data, dtype=dtype, count=count, offset=pos).copy(), pos + byte_count
+    return np.empty(0, dtype=dtype), pos
+
+
+cdef inline tuple read_primitive_sequence_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t itemsize,
+    int alignment,
+    Py_ssize_t align_offset,
+    object dtype,
+):
+    cdef uint32_t count
+    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    count = read_uint32_raw_value(data, pos)
+    pos += 4
+    return read_primitive_array_object(
+        data,
+        pos,
+        count,
+        itemsize,
+        alignment,
+        align_offset,
+        dtype,
+    )
+
+
+cdef inline tuple read_string_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    cdef uint32_t byte_count
+    cdef Py_ssize_t string_size
+
+    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    byte_count = read_uint32_raw_value(data, pos)
+    pos += 4
+
+    string_size = <Py_ssize_t> byte_count
+    if string_size <= 0:
+        raise ValueError("Invalid CDR string length.")
+
+    require_available(data.shape[0], pos, string_size)
+    if data[pos + string_size - 1] != 0:
+        raise ValueError("CDR string is missing a trailing NUL byte.")
+
+    return (
+        PyBytes_FromStringAndSize(
+            <const char*> (data_ptr(data) + pos),
+            string_size - 1,
+        ),
+        pos + string_size,
+    )
+
+
+cdef inline tuple read_string_array_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t count,
+    Py_ssize_t align_offset,
+):
+    cdef Py_ssize_t index
+    cdef list values = []
+    cdef object value
+
+    for index in range(count):
+        value, pos = read_string_object(data, pos, align_offset)
+        values.append(value)
+
+    return values, pos
+
+
+cdef inline tuple read_string_sequence_object(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    cdef uint32_t count
+
+    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    count = read_uint32_raw_value(data, pos)
+    pos += 4
+
+    return read_string_array_object(data, pos, count, align_offset)
 
 
 cdef inline Py_ssize_t bytes_size(bytes value) noexcept:
@@ -338,6 +498,187 @@ cdef inline Py_ssize_t write_string_field(
     Py_ssize_t align_offset,
 ) noexcept:
     return write_string(buffer, pos, value, align_offset)
+
+
+cdef inline tuple read_boolean_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+):
+    require_available(data.shape[0], pos, 1)
+    return bool(data[pos] != 0), pos + 1
+
+
+cdef inline tuple read_byte_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(uint8_t),
+        1,
+        align_offset,
+        np.uint8,
+    )
+
+
+cdef inline tuple read_int8_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(int8_t),
+        1,
+        align_offset,
+        np.int8,
+    )
+
+
+cdef inline tuple read_uint8_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(uint8_t),
+        1,
+        align_offset,
+        np.uint8,
+    )
+
+
+cdef inline tuple read_int16_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(int16_t),
+        2,
+        align_offset,
+        np.int16,
+    )
+
+
+cdef inline tuple read_uint16_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(uint16_t),
+        2,
+        align_offset,
+        np.uint16,
+    )
+
+
+cdef inline tuple read_int32_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(int32_t),
+        4,
+        align_offset,
+        np.int32,
+    )
+
+
+cdef inline tuple read_uint32_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(uint32_t),
+        4,
+        align_offset,
+        np.uint32,
+    )
+
+
+cdef inline tuple read_int64_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(int64_t),
+        8,
+        align_offset,
+        np.int64,
+    )
+
+
+cdef inline tuple read_uint64_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(uint64_t),
+        8,
+        align_offset,
+        np.uint64,
+    )
+
+
+cdef inline tuple read_float32_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(cnp.float32_t),
+        4,
+        align_offset,
+        np.float32,
+    )
+
+
+cdef inline tuple read_float64_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_aligned_scalar_object(
+        data,
+        pos,
+        cython.sizeof(cnp.float64_t),
+        8,
+        align_offset,
+        np.float64,
+    )
+
+
+cdef inline tuple read_string_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_string_object(data, pos, align_offset)
 
 
 cdef inline const void* bool_sequence_ptr(const cnp.npy_bool[::1] values) noexcept:
@@ -639,6 +980,223 @@ cdef inline Py_ssize_t write_text_sequence_field(
     Py_ssize_t align_offset,
 ) noexcept:
     return write_string_sequence(buffer, pos, values, align_offset)
+
+
+cdef inline tuple read_bool_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(cnp.npy_bool),
+        1,
+        align_offset,
+        np.bool_,
+    )
+
+
+cdef inline tuple read_byte_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        3,
+        cython.sizeof(uint8_t),
+        1,
+        align_offset,
+        np.uint8,
+    )
+
+
+cdef inline tuple read_int8_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(int8_t),
+        1,
+        align_offset,
+        np.int8,
+    )
+
+
+cdef inline tuple read_uint8_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        3,
+        cython.sizeof(uint8_t),
+        1,
+        align_offset,
+        np.uint8,
+    )
+
+
+cdef inline tuple read_int16_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(int16_t),
+        2,
+        align_offset,
+        np.int16,
+    )
+
+
+cdef inline tuple read_uint16_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        2,
+        cython.sizeof(uint16_t),
+        2,
+        align_offset,
+        np.uint16,
+    )
+
+
+cdef inline tuple read_int32_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(int32_t),
+        4,
+        align_offset,
+        np.int32,
+    )
+
+
+cdef inline tuple read_uint32_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        2,
+        cython.sizeof(uint32_t),
+        4,
+        align_offset,
+        np.uint32,
+    )
+
+
+cdef inline tuple read_int64_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(int64_t),
+        8,
+        align_offset,
+        np.int64,
+    )
+
+
+cdef inline tuple read_uint64_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        2,
+        cython.sizeof(uint64_t),
+        8,
+        align_offset,
+        np.uint64,
+    )
+
+
+cdef inline tuple read_float32_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(cnp.float32_t),
+        4,
+        align_offset,
+        np.float32,
+    )
+
+
+cdef inline tuple read_float64_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_array_object(
+        data,
+        pos,
+        2,
+        cython.sizeof(cnp.float64_t),
+        8,
+        align_offset,
+        np.float64,
+    )
+
+
+cdef inline tuple read_float64_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_primitive_sequence_object(
+        data,
+        pos,
+        cython.sizeof(cnp.float64_t),
+        8,
+        align_offset,
+        np.float64,
+    )
+
+
+cdef inline tuple read_text_array_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_string_array_object(data, pos, 2, align_offset)
+
+
+cdef inline tuple read_text_sequence_field(
+    const unsigned char[::1] data,
+    Py_ssize_t pos,
+    Py_ssize_t align_offset,
+):
+    return read_string_sequence_object(data, pos, align_offset)
 
 
 cdef inline void require_fixed_length(
@@ -1056,3 +1614,107 @@ cpdef bytearray serialize_every_supported_schema(
     pos = write_text_array_field(buffer, pos, text_array, align_offset)
     pos = write_text_sequence_field(buffer, pos, text_sequence, align_offset)
     return output
+
+
+cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
+    cdef Py_ssize_t pos = validate_encapsulation_header(data)
+    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+    cdef object boolean_value
+    cdef object byte_value
+    cdef object signed_int8
+    cdef object unsigned_int8
+    cdef object signed_int16
+    cdef object unsigned_int16
+    cdef object signed_int32
+    cdef object unsigned_int32
+    cdef object signed_int64
+    cdef object unsigned_int64
+    cdef object float32_value
+    cdef object float64_value
+    cdef object text
+    cdef object header_stamp_sec
+    cdef object header_stamp_nanosec
+    cdef object header_frame_id
+    cdef object bool_sequence
+    cdef object byte_array
+    cdef object int8_sequence
+    cdef object uint8_array
+    cdef object int16_sequence
+    cdef object uint16_array
+    cdef object int32_sequence
+    cdef object uint32_array
+    cdef object int64_sequence
+    cdef object uint64_array
+    cdef object float32_sequence
+    cdef object float64_array
+    cdef object text_array
+    cdef object text_sequence
+
+    boolean_value, pos = read_boolean_field(data, pos)
+    byte_value, pos = read_byte_field(data, pos, align_offset)
+    signed_int8, pos = read_int8_field(data, pos, align_offset)
+    unsigned_int8, pos = read_uint8_field(data, pos, align_offset)
+    signed_int16, pos = read_int16_field(data, pos, align_offset)
+    unsigned_int16, pos = read_uint16_field(data, pos, align_offset)
+    signed_int32, pos = read_int32_field(data, pos, align_offset)
+    unsigned_int32, pos = read_uint32_field(data, pos, align_offset)
+    signed_int64, pos = read_int64_field(data, pos, align_offset)
+    unsigned_int64, pos = read_uint64_field(data, pos, align_offset)
+    float32_value, pos = read_float32_field(data, pos, align_offset)
+    float64_value, pos = read_float64_field(data, pos, align_offset)
+    text, pos = read_string_field(data, pos, align_offset)
+    header_stamp_sec, pos = read_int32_field(data, pos, align_offset)
+    header_stamp_nanosec, pos = read_uint32_field(data, pos, align_offset)
+    header_frame_id, pos = read_string_field(data, pos, align_offset)
+    bool_sequence, pos = read_bool_sequence_field(data, pos, align_offset)
+    byte_array, pos = read_byte_array_field(data, pos, align_offset)
+    int8_sequence, pos = read_int8_sequence_field(data, pos, align_offset)
+    uint8_array, pos = read_uint8_array_field(data, pos, align_offset)
+    int16_sequence, pos = read_int16_sequence_field(data, pos, align_offset)
+    uint16_array, pos = read_uint16_array_field(data, pos, align_offset)
+    int32_sequence, pos = read_int32_sequence_field(data, pos, align_offset)
+    uint32_array, pos = read_uint32_array_field(data, pos, align_offset)
+    int64_sequence, pos = read_int64_sequence_field(data, pos, align_offset)
+    uint64_array, pos = read_uint64_array_field(data, pos, align_offset)
+    float32_sequence, pos = read_float32_sequence_field(data, pos, align_offset)
+    float64_array, pos = read_float64_array_field(data, pos, align_offset)
+    text_array, pos = read_text_array_field(data, pos, align_offset)
+    text_sequence, pos = read_text_sequence_field(data, pos, align_offset)
+    require_consumed(data, pos)
+
+    return {
+        "boolean_value": boolean_value,
+        "byte_value": byte_value,
+        "signed_int8": signed_int8,
+        "unsigned_int8": unsigned_int8,
+        "signed_int16": signed_int16,
+        "unsigned_int16": unsigned_int16,
+        "signed_int32": signed_int32,
+        "unsigned_int32": unsigned_int32,
+        "signed_int64": signed_int64,
+        "unsigned_int64": unsigned_int64,
+        "float32_value": float32_value,
+        "float64_value": float64_value,
+        "text": text,
+        "header": {
+            "stamp": {
+                "sec": header_stamp_sec,
+                "nanosec": header_stamp_nanosec,
+            },
+            "frame_id": header_frame_id,
+        },
+        "bool_sequence": bool_sequence,
+        "byte_array": byte_array,
+        "int8_sequence": int8_sequence,
+        "uint8_array": uint8_array,
+        "int16_sequence": int16_sequence,
+        "uint16_array": uint16_array,
+        "int32_sequence": int32_sequence,
+        "uint32_array": uint32_array,
+        "int64_sequence": int64_sequence,
+        "uint64_array": uint64_array,
+        "float32_sequence": float32_sequence,
+        "float64_array": float64_array,
+        "text_array": text_array,
+        "text_sequence": text_sequence,
+    }

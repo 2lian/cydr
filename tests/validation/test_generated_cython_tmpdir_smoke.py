@@ -5,7 +5,10 @@ import pytest
 
 from cyclonedds_idl import IdlStruct, types
 from xcdrjit import Time
-from xcdrjit.idl import load_cython_serialize_function, schema_type_hash
+from xcdrjit.idl import (
+    get_codec_for,
+    schema_type_hash,
+)
 from ..cache import SCHEMA_CACHE_DIR
 from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA
 
@@ -168,16 +171,14 @@ def serialize_joint_state_cyclone(values: dict[str, object]) -> bytes:
 
 
 @pytest.mark.parametrize(
-    ("case_name", "schema", "values_factory", "cyclone_serializer"),
+    ("schema", "values_factory", "cyclone_serializer"),
     [
         (
-            "every_supported_schema",
             EVERY_SUPPORTED_SCHEMA,
             build_every_supported_values,
             serialize_every_supported_cyclone,
         ),
         (
-            "joint_state",
             JOINT_STATE_SCHEMA,
             build_joint_state_values,
             serialize_joint_state_cyclone,
@@ -185,21 +186,19 @@ def serialize_joint_state_cyclone(values: dict[str, object]) -> bytes:
     ],
 )
 def test_generated_cython_module_compiles_from_tmp_dir_and_runs_once(
-    case_name: str,
     schema,
     values_factory,
     cyclone_serializer,
 ) -> None:
-    cache_dir = SCHEMA_CACHE_DIR
-    assert case_name
     values = values_factory()
-    serialize = load_cython_serialize_function(schema, cache_dir=cache_dir)
+    codec = get_codec_for(schema)
+    serialize = codec.serialize
+    deserialize = codec.deserialize
     generated_bytes = bytes(serialize(values))
     assert generated_bytes == cyclone_serializer(values)
+    assert bytes(serialize(deserialize(generated_bytes))) == generated_bytes
 
-    cached_serialize = load_cython_serialize_function(
-        schema, cache_dir=cache_dir
-    )
-    assert bytes(cached_serialize(values)) == generated_bytes
+    cached_codec = get_codec_for(schema)
+    assert bytes(cached_codec.serialize(values)) == generated_bytes
     expected_hash = schema_type_hash(schema)
-    assert (cache_dir / f"xcdrjit_schema_{expected_hash}.pyx").exists()
+    assert (SCHEMA_CACHE_DIR / f"schema_{expected_hash}.pyx").exists()

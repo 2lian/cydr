@@ -13,11 +13,13 @@ pyximport.install(
 
 from xcdrjit._every_supported_cython import (  # noqa: E402
     compute_serialized_size_every_supported_schema,
+    deserialize_every_supported_schema,
     serialize_every_supported_schema,
 )
 
 
 __all__ = [
     "compute_serialized_size_every_supported_schema",
+    "deserialize_every_supported_schema",
     "serialize_every_supported_schema",
 ]

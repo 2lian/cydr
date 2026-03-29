@@ -2,56 +2,73 @@
 
 from __future__ import annotations
 
-from xcdrjit.idl import CythonFieldType, flatten_cython_fields
+from xcdrjit.idl import (
+    array,
+    boolean,
+    byte,
+    flatten_cython_fields,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    sequence,
+    string,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
 
 
 HEADER_SCHEMA = {
     "stamp": {
-        "sec": CythonFieldType.INT32,
-        "nanosec": CythonFieldType.UINT32,
+        "sec": int32,
+        "nanosec": uint32,
     },
-    "frame_id": CythonFieldType.STRING,
+    "frame_id": string,
 }
 
 
 JOINT_STATE_SCHEMA = {
     "header": HEADER_SCHEMA,
-    "name": CythonFieldType.TEXT_SEQUENCE,
-    "position": CythonFieldType.FLOAT64_SEQUENCE,
-    "velocity": CythonFieldType.FLOAT64_SEQUENCE,
-    "effort": CythonFieldType.FLOAT64_SEQUENCE,
+    "name": sequence(string),
+    "position": sequence(float64),
+    "velocity": sequence(float64),
+    "effort": sequence(float64),
 }
 
 
 EVERY_SUPPORTED_SCHEMA = {
-    "boolean_value": CythonFieldType.BOOLEAN,
-    "byte_value": CythonFieldType.BYTE,
-    "signed_int8": CythonFieldType.INT8,
-    "unsigned_int8": CythonFieldType.UINT8,
-    "signed_int16": CythonFieldType.INT16,
-    "unsigned_int16": CythonFieldType.UINT16,
-    "signed_int32": CythonFieldType.INT32,
-    "unsigned_int32": CythonFieldType.UINT32,
-    "signed_int64": CythonFieldType.INT64,
-    "unsigned_int64": CythonFieldType.UINT64,
-    "float32_value": CythonFieldType.FLOAT32,
-    "float64_value": CythonFieldType.FLOAT64,
-    "text": CythonFieldType.STRING,
+    "boolean_value": boolean,
+    "byte_value": byte,
+    "signed_int8": int8,
+    "unsigned_int8": uint8,
+    "signed_int16": int16,
+    "unsigned_int16": uint16,
+    "signed_int32": int32,
+    "unsigned_int32": uint32,
+    "signed_int64": int64,
+    "unsigned_int64": uint64,
+    "float32_value": float32,
+    "float64_value": float64,
+    "text": string,
     "header": HEADER_SCHEMA,
-    "bool_sequence": CythonFieldType.BOOL_SEQUENCE,
-    "byte_array": CythonFieldType.BYTE_ARRAY_3,
-    "int8_sequence": CythonFieldType.INT8_SEQUENCE,
-    "uint8_array": CythonFieldType.UINT8_ARRAY_3,
-    "int16_sequence": CythonFieldType.INT16_SEQUENCE,
-    "uint16_array": CythonFieldType.UINT16_ARRAY_2,
-    "int32_sequence": CythonFieldType.INT32_SEQUENCE,
-    "uint32_array": CythonFieldType.UINT32_ARRAY_2,
-    "int64_sequence": CythonFieldType.INT64_SEQUENCE,
-    "uint64_array": CythonFieldType.UINT64_ARRAY_2,
-    "float32_sequence": CythonFieldType.FLOAT32_SEQUENCE,
-    "float64_array": CythonFieldType.FLOAT64_ARRAY_2,
-    "text_array": CythonFieldType.TEXT_ARRAY_2,
-    "text_sequence": CythonFieldType.TEXT_SEQUENCE,
+    "bool_sequence": sequence(boolean),
+    "byte_array": array(byte, 3),
+    "int8_sequence": sequence(int8),
+    "uint8_array": array(uint8, 3),
+    "int16_sequence": sequence(int16),
+    "uint16_array": array(uint16, 2),
+    "int32_sequence": sequence(int32),
+    "uint32_array": array(uint32, 2),
+    "int64_sequence": sequence(int64),
+    "uint64_array": array(uint64, 2),
+    "float32_sequence": sequence(float32),
+    "float64_array": array(float64, 2),
+    "text_array": array(string, 2),
+    "text_sequence": sequence(string),
 }
 
 

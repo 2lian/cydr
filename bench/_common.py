@@ -8,16 +8,15 @@ from typing import Callable
 import numpy as np
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BenchmarkCase:
     label: str
     count: int
     payload_size: int
-    xcdrjit_fn: Callable[[], object]
-    cyclonedds_fn: Callable[[], object]
+    functions: dict[str, Callable[[], object]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Measurement:
     loops: int
     best_seconds: float
@@ -44,12 +43,12 @@ def measure_runtime(fn: Callable[[], object], *, repeat: int, min_time: float) -
 
 
 def benchmark_case(case: BenchmarkCase, *, repeat: int, min_time: float) -> dict[str, Measurement]:
-    case.xcdrjit_fn()
-    case.cyclonedds_fn()
+    for fn in case.functions.values():
+        fn()
 
     return {
-        "xcdrjit_cached": measure_runtime(case.xcdrjit_fn, repeat=repeat, min_time=min_time),
-        "cyclonedds_idl": measure_runtime(case.cyclonedds_fn, repeat=repeat, min_time=min_time),
+        name: measure_runtime(fn, repeat=repeat, min_time=min_time)
+        for name, fn in case.functions.items()
     }
 
 
@@ -79,9 +78,11 @@ def print_environment(title: str, description_lines: list[str]) -> None:
 def print_results(
     cases: list[BenchmarkCase],
     measurements: dict[str, dict[str, Measurement]],
+    *,
+    implementation_header: str = "Implementation",
 ) -> None:
     print(
-        f"{'Case':<12} {'Count':>8} {'Bytes':>10} {'Serializer':<20} "
+        f"{'Case':<12} {'Count':>8} {'Bytes':>10} {implementation_header:<20} "
         f"{'Loops':>10} {'Best us':>12} {'Median us':>12} {'MiB/s':>12} {'Speedup':>10}"
     )
     print("-" * 114)
@@ -90,7 +91,7 @@ def print_results(
         case_measurements = measurements[case.label]
         cyclonedds_best = case_measurements["cyclonedds_idl"].best_seconds
 
-        for serializer_name in ("xcdrjit_cached", "cyclonedds_idl"):
+        for serializer_name in case.functions:
             measurement = case_measurements[serializer_name]
             speedup = cyclonedds_best / measurement.best_seconds
             print(

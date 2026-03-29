@@ -8,6 +8,7 @@ from cyclonedds_idl import IdlStruct, types
 from xcdrjit import Time
 from xcdrjit.every_supported_cython import (
     compute_serialized_size_every_supported_schema,
+    deserialize_every_supported_schema,
     serialize_every_supported_schema,
 )
 
@@ -238,6 +239,41 @@ def serialize_cyclone(values: dict[str, object]) -> bytes:
     ).serialize()
 
 
+def flatten_decoded(decoded: dict[str, object]) -> dict[str, object]:
+    return {
+        "boolean_value": decoded["boolean_value"],
+        "byte_value": decoded["byte_value"],
+        "signed_int8": decoded["signed_int8"],
+        "unsigned_int8": decoded["unsigned_int8"],
+        "signed_int16": decoded["signed_int16"],
+        "unsigned_int16": decoded["unsigned_int16"],
+        "signed_int32": decoded["signed_int32"],
+        "unsigned_int32": decoded["unsigned_int32"],
+        "signed_int64": decoded["signed_int64"],
+        "unsigned_int64": decoded["unsigned_int64"],
+        "float32_value": decoded["float32_value"],
+        "float64_value": decoded["float64_value"],
+        "text": decoded["text"],
+        "header_stamp_sec": decoded["header"]["stamp"]["sec"],
+        "header_stamp_nanosec": decoded["header"]["stamp"]["nanosec"],
+        "header_frame_id": decoded["header"]["frame_id"],
+        "bool_sequence": decoded["bool_sequence"],
+        "byte_array": decoded["byte_array"],
+        "int8_sequence": decoded["int8_sequence"],
+        "uint8_array": decoded["uint8_array"],
+        "int16_sequence": decoded["int16_sequence"],
+        "uint16_array": decoded["uint16_array"],
+        "int32_sequence": decoded["int32_sequence"],
+        "uint32_array": decoded["uint32_array"],
+        "int64_sequence": decoded["int64_sequence"],
+        "uint64_array": decoded["uint64_array"],
+        "float32_sequence": decoded["float32_sequence"],
+        "float64_array": decoded["float64_array"],
+        "text_array": decoded["text_array"],
+        "text_sequence": decoded["text_sequence"],
+    }
+
+
 @pytest.mark.parametrize("prefix_length", range(1, len(FIELD_ORDER) + 1), ids=FIELD_ORDER)
 def test_cython_every_supported_schema_matches_cyclone_incrementally(prefix_length: int) -> None:
     values = build_case(prefix_length)
@@ -279,3 +315,21 @@ def test_cython_every_supported_schema_matches_cyclone_incrementally(prefix_leng
 
     assert computed_size == len(cython_bytes)
     assert cython_bytes == cyclone_bytes
+
+
+@pytest.mark.parametrize("build_values", [default_inputs, non_default_inputs], ids=["default", "non_default"])
+def test_deserialize_every_supported_schema_roundtrips_against_cyclone(build_values) -> None:
+    values = build_values()
+
+    cyclone_bytes = serialize_cyclone(values)
+    decoded = deserialize_every_supported_schema(cyclone_bytes)
+    roundtrip_values = flatten_decoded(decoded)
+    roundtrip_bytes = serialize_cython(roundtrip_values)
+
+    assert roundtrip_bytes == cyclone_bytes
+    assert roundtrip_values["text"] == values["text"]
+    assert roundtrip_values["header_frame_id"] == values["header_frame_id"]
+    assert np.array_equal(roundtrip_values["bool_sequence"], values["bool_sequence"])
+    assert np.array_equal(roundtrip_values["float64_array"], values["float64_array"])
+    assert roundtrip_values["text_array"] == values["text_array"]
+    assert roundtrip_values["text_sequence"] == values["text_sequence"]

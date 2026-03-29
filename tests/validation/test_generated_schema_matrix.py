@@ -6,8 +6,19 @@ import pytest
 from cyclonedds_idl import IdlStruct, types
 
 from xcdrjit import Time
-from xcdrjit.idl import CythonFieldType, load_cython_serializer
-from ..cache import SCHEMA_CACHE_DIR
+from xcdrjit.idl import (
+    array,
+    boolean,
+    float32,
+    float64,
+    get_codec_for,
+    int16,
+    int32,
+    sequence,
+    string,
+    uint32,
+    uint64,
+)
 from ..schema import HEADER_SCHEMA
 
 
@@ -84,59 +95,59 @@ class MissionStatus(IdlStruct, typename="test/msg/MissionStatus"):
 
 
 SCALAR_ENVELOPE_SCHEMA = {
-    "active": CythonFieldType.BOOLEAN,
-    "priority": CythonFieldType.UINT32,
-    "title": CythonFieldType.STRING,
+    "active": boolean,
+    "priority": uint32,
+    "title": string,
     "header": HEADER_SCHEMA,
-    "samples": CythonFieldType.FLOAT64_SEQUENCE,
+    "samples": sequence(float64),
 }
 
 
 ACTUATOR_BANK_SCHEMA = {
     "left": {
-        "enabled": CythonFieldType.BOOLEAN,
-        "temperature": CythonFieldType.FLOAT32,
+        "enabled": boolean,
+        "temperature": float32,
     },
     "right": {
-        "enabled": CythonFieldType.BOOLEAN,
-        "temperature": CythonFieldType.FLOAT32,
+        "enabled": boolean,
+        "temperature": float32,
     },
-    "ids": CythonFieldType.TEXT_ARRAY_2,
-    "currents": CythonFieldType.INT16_SEQUENCE,
+    "ids": array(string, 2),
+    "currents": sequence(int16),
 }
 
 
 PACKET_WINDOW_SCHEMA = {
     "header": HEADER_SCHEMA,
-    "flags": CythonFieldType.BOOL_SEQUENCE,
-    "window": CythonFieldType.UINT64_ARRAY_2,
-    "codes": CythonFieldType.INT32_SEQUENCE,
-    "labels": CythonFieldType.TEXT_SEQUENCE,
+    "flags": sequence(boolean),
+    "window": array(uint64, 2),
+    "codes": sequence(int32),
+    "labels": sequence(string),
 }
 
 
 STAMPED_POSE_LITE_SCHEMA = {
     "header": HEADER_SCHEMA,
     "pose": {
-        "x": CythonFieldType.FLOAT64,
-        "y": CythonFieldType.FLOAT64,
+        "x": float64,
+        "y": float64,
     },
-    "variances": CythonFieldType.FLOAT64_ARRAY_2,
-    "tags": CythonFieldType.TEXT_ARRAY_2,
-    "residuals": CythonFieldType.FLOAT32_SEQUENCE,
+    "variances": array(float64, 2),
+    "tags": array(string, 2),
+    "residuals": sequence(float32),
 }
 
 
 MISSION_STATUS_SCHEMA = {
     "meta": {
         "inner": {
-            "count": CythonFieldType.INT32,
-            "valid": CythonFieldType.BOOLEAN,
+            "count": int32,
+            "valid": boolean,
         },
-        "note": CythonFieldType.STRING,
+        "note": string,
     },
-    "moments": CythonFieldType.FLOAT64_ARRAY_2,
-    "names": CythonFieldType.TEXT_SEQUENCE,
+    "moments": array(float64, 2),
+    "names": sequence(string),
 }
 
 
@@ -342,21 +353,16 @@ def test_generated_schemas_match_cyclone(
     cyclone_serializer,
 ) -> None:
     assert case_name
-    compute_size, serialize = load_cython_serializer(
-        schema,
-        cache_dir=SCHEMA_CACHE_DIR,
-    )
+    codec = get_codec_for(schema)
     values = values_factory()
 
-    generated = bytes(serialize(values))
+    generated = bytes(codec.serialize(values))
     expected = cyclone_serializer(values)
 
-    assert compute_size(values) == len(generated)
+    assert codec.compute_size(values) == len(generated)
     assert generated == expected
+    assert bytes(codec.serialize(codec.deserialize(expected))) == expected
 
-    cached_compute, cached_serialize = load_cython_serializer(
-        schema,
-        cache_dir=SCHEMA_CACHE_DIR,
-    )
-    assert cached_compute(values) == len(expected)
-    assert bytes(cached_serialize(values)) == expected
+    cached_codec = get_codec_for(schema)
+    assert cached_codec.compute_size(values) == len(expected)
+    assert bytes(cached_codec.serialize(values)) == expected
