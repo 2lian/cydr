@@ -181,13 +181,11 @@ cdef inline tuple read_string_object(
     if data[pos + string_size - 1] != 0:
         raise ValueError("CDR string is missing a trailing NUL byte.")
 
-    return (
-        PyBytes_FromStringAndSize(
-            <const char*> (data_ptr(data) + pos),
-            string_size - 1,
-        ),
-        pos + string_size,
-    )
+    # Return owned bytes, not a memoryview. For robotics-style workloads,
+    # many short strings are common and copying is faster overall than
+    # creating many Python memoryview slice objects. If we revisit large
+    # scalar strings later, this is the place to try a zero-copy view again.
+    return PyBytes_FromStringAndSize(<char*> &data[pos], string_size - 1), pos + string_size
 
 
 cdef inline tuple read_string_array_object(
@@ -197,10 +195,13 @@ cdef inline tuple read_string_array_object(
     Py_ssize_t align_offset,
 ):
     cdef Py_ssize_t index
-    cdef list values = []
     cdef object value
+    cdef list values = []
 
     for index in range(count):
+        # Keep string arrays and sequences on the same bytes-copy path as
+        # scalar strings. A shared base memoryview was still slower than
+        # copying for the short-string arrays that matter most in ROS 2.
         value, pos = read_string_object(data, pos, align_offset)
         values.append(value)
 
