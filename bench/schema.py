@@ -1,6 +1,8 @@
 """Schema fixtures shared by benchmarks."""
 
-from __future__ import annotations
+from dataclasses import dataclass
+
+from cyclonedds_idl import IdlStruct, types
 
 from xcdrjit.idl import (
     array,
@@ -19,6 +21,12 @@ from xcdrjit.idl import (
     uint32,
     uint64,
 )
+
+
+@dataclass
+class Time(IdlStruct, typename="builtin_interfaces/msg/Time"):
+    sec: types.int32 = 0
+    nanosec: types.uint32 = 0
 
 
 HEADER_SCHEMA = {
@@ -72,6 +80,7 @@ EVERY_SUPPORTED_SCHEMA = {
 
 
 __all__ = [
+    "Time",
     "HEADER_SCHEMA",
     "JOINT_STATE_SCHEMA",
     "EVERY_SUPPORTED_SCHEMA",

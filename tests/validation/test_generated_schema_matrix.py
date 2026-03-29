@@ -5,7 +5,6 @@ import pytest
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit import Time
 from xcdrjit.idl import (
     array,
     boolean,
@@ -19,7 +18,7 @@ from xcdrjit.idl import (
     uint32,
     uint64,
 )
-from ..schema import HEADER_SCHEMA
+from ..schema import HEADER_SCHEMA, Time
 
 
 @dataclass

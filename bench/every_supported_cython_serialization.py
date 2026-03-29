@@ -2,15 +2,14 @@
 
 import argparse
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 
 from cyclonedds_idl import IdlStruct, types
 
 from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
-from bench.schema import EVERY_SUPPORTED_SCHEMA
-from xcdrjit import Time, assert_messages_equal
+from bench.schema import EVERY_SUPPORTED_SCHEMA, Time
+from xcdrjit import assert_messages_equal
 from xcdrjit.idl import (
     CYTHON_CACHE_DIR,
     XcdrStruct,

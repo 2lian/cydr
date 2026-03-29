@@ -1,7 +1,5 @@
 """Private runtime helpers for generated xcdrjit codecs."""
 
-from __future__ import annotations
-
 import hashlib
 import importlib
 import importlib.util
@@ -14,23 +12,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 import numpy as np
 import pyximport
 
 from .cython_generator import (
-    NestedCythonFields,
-    flatten_cython_fields,
     generate_cython_serializer_module,
 )
-from .schema_types import FlatField
-
-SchemaValues: TypeAlias = Mapping[str, object]
-DecodedValues: TypeAlias = dict[str, object]
-FlatValues: TypeAlias = list[object] | tuple[object, ...]
-FlatDecodedValues: TypeAlias = tuple[object, ...]
-
+from .schema_types import (
+    FlatField,
+    NestedSchemaFields,
+    field_cache_token,
+    flatten_schema_fields,
+)
 
 class ComputeSizeFunction(Protocol):
     """Callable returned by ``get_codec_for(...).compute_size``."""
@@ -40,7 +35,11 @@ class ComputeSizeFunction(Protocol):
     cache_dir: Path
     module_name: str
 
-    def __call__(self, values: SchemaValues | FlatValues, /) -> int: ...
+    def __call__(
+        self,
+        values: Mapping[str, object] | list[object] | tuple[object, ...],
+        /,
+    ) -> int: ...
 
 
 class SerializerFunction(Protocol):
@@ -51,7 +50,11 @@ class SerializerFunction(Protocol):
     cache_dir: Path
     module_name: str
 
-    def __call__(self, values: SchemaValues | FlatValues, /) -> bytearray: ...
+    def __call__(
+        self,
+        values: Mapping[str, object] | list[object] | tuple[object, ...],
+        /,
+    ) -> bytearray: ...
 
 
 class DeserializerFunction(Protocol):
@@ -68,7 +71,7 @@ class DeserializerFunction(Protocol):
         /,
         *,
         flat: bool = False,
-    ) -> DecodedValues | FlatDecodedValues: ...
+    ) -> dict[str, object] | tuple[object, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +104,6 @@ _SCHEMA_HASH_VERSION = "xcdrjit-codegen-v4"
 _DEFAULT_CACHE_NAME = ".xcdrjit_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("XCDRJIT_CACHE_DIR")
-_DEFAULT_RESOLVED_CACHE_DIR: Path | None = None
 _SHADOW_INIT = '"""Minimal shadow package for generated xcdrjit codecs."""\n'
 _HELPER_BACKEND_FILES = (
     "_every_supported_cython.pyx",
@@ -147,18 +149,18 @@ def _resolve_cython_cache_dir() -> Path:
 CYTHON_CACHE_DIR = _resolve_cython_cache_dir()
 
 
-def schema_type_hash(schema: NestedCythonFields) -> str:
+def schema_type_hash(schema: NestedSchemaFields) -> str:
     """Return a stable hash for the flattened schema type sequence."""
-    flattened = flatten_cython_fields(schema)
+    flattened = flatten_schema_fields(schema)
     payload = (
         _SCHEMA_HASH_VERSION
         + "\0"
-        + "\0".join(field_type.cache_token for field_type in flattened.values())
+        + "\0".join(field_cache_token(field_type) for field_type in flattened.values())
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:_SCHEMA_HASH_LENGTH]
 
 
-def flatten_cython_value_list(values: SchemaValues) -> list[object]:
+def flatten_cython_value_list(values: Mapping[str, object]) -> list[object]:
     """Flatten nested runtime values in insertion order and ignore keys.
 
     This mirrors the calling convention of the generated codecs: only the value
@@ -178,14 +180,14 @@ def flatten_cython_value_list(values: SchemaValues) -> list[object]:
 
 
 def inflate_cython_value_tree(
-    schema: NestedCythonFields,
+    schema: NestedSchemaFields,
     flat_values: list[object] | tuple[object, ...],
-) -> DecodedValues:
+) -> dict[str, object]:
     """Rebuild a nested value mapping from flat decoded values."""
     remaining = iter(flat_values)
 
-    def build(node: NestedCythonFields) -> DecodedValues:
-        rebuilt: DecodedValues = {}
+    def build(node: NestedSchemaFields) -> dict[str, object]:
+        rebuilt: dict[str, object] = {}
         for field_name, field_value in node.items():
             if isinstance(field_value, Mapping):
                 rebuilt[field_name] = build(field_value)
@@ -193,7 +195,9 @@ def inflate_cython_value_tree(
                 try:
                     rebuilt[field_name] = next(remaining)
                 except StopIteration as exc:
-                    raise ValueError("Decoded value list is shorter than the schema.") from exc
+                    raise ValueError(
+                        "Decoded value list is shorter than the schema."
+                    ) from exc
         return rebuilt
 
     rebuilt = build(schema)
@@ -321,7 +325,7 @@ def _bind_schema_callable(
 ):
     expected_arg_count = len(field_names)
 
-    def wrapper(values: SchemaValues | FlatValues):
+    def wrapper(values: Mapping[str, object] | list[object] | tuple[object, ...]):
         if isinstance(values, Mapping):
             normalized_args = flatten_cython_value_list(values)
         elif isinstance(values, (list, tuple)):
@@ -354,14 +358,14 @@ def _bind_schema_callable(
 
 def _bind_deserialize_callable(
     function,
-    schema: NestedCythonFields,
+    schema: NestedSchemaFields,
     field_names: tuple[str, ...],
     schema_hash_value: str,
     cache_dir: Path,
 ):
     expected_arg_count = len(field_names)
 
-    def wrapper(data, *, flat: bool = False):
+    def wrapper(data, flat: bool = False):
         flat_values = function(data)
         if len(flat_values) != expected_arg_count:
             raise ValueError(
@@ -386,12 +390,12 @@ def _bind_deserialize_callable(
 
 
 def _load_generated_schema_module(
-    schema: NestedCythonFields,
+    schema: NestedSchemaFields,
 ) -> GeneratedModuleInfo:
     resolved_cache_dir = CYTHON_CACHE_DIR
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    flattened_fields = flatten_cython_fields(schema)
+    flattened_fields = flatten_schema_fields(schema)
     schema_hash_value = schema_type_hash(schema)
     module_name = f"schema_{schema_hash_value}"
     source_path = resolved_cache_dir / f"{module_name}.pyx"
@@ -411,7 +415,7 @@ def _load_generated_schema_module(
 
 
 def get_codec_for(
-    schema: NestedCythonFields,
+    schema: NestedSchemaFields,
 ) -> Codec:
     """Return the cached codec for a schema.
 
@@ -466,18 +470,3 @@ def get_codec_for(
         cache_dir=module_info.cache_dir,
         module_name=module_info.module_name,
     )
-
-
-__all__ = [
-    "CYTHON_CACHE_DIR",
-    "Codec",
-    "ComputeSizeFunction",
-    "DecodedValues",
-    "DeserializerFunction",
-    "SchemaValues",
-    "SerializerFunction",
-    "flatten_cython_value_list",
-    "get_codec_for",
-    "inflate_cython_value_tree",
-    "schema_type_hash",
-]

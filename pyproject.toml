@@ -12,7 +12,7 @@ name = "xcdrjit"
 version = "0.1.0"
 description = "Generate and cache Cython-backed XCDR1 serializers from nested Python schemas."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 authors = [
     { name = "Elian Neppel" },
 ]
@@ -28,8 +28,13 @@ classifiers = [
 ]
 dependencies = [
     "Cython>=3.0,<4",
-    "cyclonedds-idl>=0.1.0,<0.2",
+    "msgspec>=0.20.0,<0.21",
     "numpy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "cyclonedds-idl>=0.1.0,<0.2",
 ]
 
 [tool.setuptools]

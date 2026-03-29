@@ -5,6 +5,7 @@ Active benchmarks:
 - `pixi run bench-joint-state-cython`
 - `pixi run bench-every-supported-cython`
 - `pixi run bench-fixed-arrays-cython`
+- `pixi run bench-primitive-matrix-cython`
 
 Both benchmark scripts are written around the public runtime API:
 
@@ -34,4 +35,5 @@ You can override timing settings, for example:
 ```bash
 pixi run bench-joint-state-cython -- --repeat 5 --min-time 0.1
 pixi run bench-every-supported-cython -- --repeat 5 --min-time 0.1
+pixi run bench-primitive-matrix-cython -- --match float64 --limit 4
 ```

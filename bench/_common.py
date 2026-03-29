@@ -23,7 +23,7 @@ class Measurement:
     median_seconds: float
 
 
-def measure_runtime(fn: Callable[[], object], *, repeat: int, min_time: float) -> Measurement:
+def measure_runtime(fn: Callable[[], object], repeat: int, min_time: float) -> Measurement:
     timer = timeit.Timer(fn)
     loops = 1
 
@@ -42,8 +42,10 @@ def measure_runtime(fn: Callable[[], object], *, repeat: int, min_time: float) -
     )
 
 
-def benchmark_case(case: BenchmarkCase, *, repeat: int, min_time: float) -> dict[str, Measurement]:
+def benchmark_case(case: BenchmarkCase, repeat: int, min_time: float) -> dict[str, Measurement]:
     for fn in case.functions.values():
+        fn()
+        fn()
         fn()
 
     return {
@@ -78,7 +80,6 @@ def print_environment(title: str, description_lines: list[str]) -> None:
 def print_results(
     cases: list[BenchmarkCase],
     measurements: dict[str, dict[str, Measurement]],
-    *,
     implementation_header: str = "Implementation",
 ) -> None:
     print(

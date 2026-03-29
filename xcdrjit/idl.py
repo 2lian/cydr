@@ -9,33 +9,30 @@ Naming plan:
   [`_runtime.py`](/home/elian/debug/cdr/xcdrjit/_runtime.py) module
 """
 
-from __future__ import annotations
-
 from ._message_ops import assert_messages_equal
 from ._runtime import (
     CYTHON_CACHE_DIR,
     Codec,
     ComputeSizeFunction,
-    DecodedValues,
     DeserializerFunction,
-    SchemaValues,
     SerializerFunction,
     flatten_cython_value_list,
     get_codec_for,
     inflate_cython_value_tree,
     schema_type_hash,
 )
+from ._warmup import warmup_codec
 from .cython_generator import (
-    NestedCythonFields,
-    flatten_cython_fields,
     generate_cython_serializer_code,
 )
 from .schema_types import (
     ArrayType,
+    NestedSchemaFields,
     SequenceType,
     array,
     boolean,
     byte,
+    flatten_schema_fields,
     float32,
     float64,
     int8,
@@ -50,39 +47,3 @@ from .schema_types import (
     uint64,
 )
 from .structs import XcdrStruct
-
-__all__ = [
-    "ArrayType",
-    "CYTHON_CACHE_DIR",
-    "Codec",
-    "ComputeSizeFunction",
-    "DecodedValues",
-    "DeserializerFunction",
-    "NestedCythonFields",
-    "SchemaValues",
-    "SequenceType",
-    "SerializerFunction",
-    "XcdrStruct",
-    "assert_messages_equal",
-    "array",
-    "boolean",
-    "byte",
-    "flatten_cython_fields",
-    "flatten_cython_value_list",
-    "float32",
-    "float64",
-    "generate_cython_serializer_code",
-    "get_codec_for",
-    "inflate_cython_value_tree",
-    "int8",
-    "int16",
-    "int32",
-    "int64",
-    "sequence",
-    "schema_type_hash",
-    "string",
-    "uint8",
-    "uint16",
-    "uint32",
-    "uint64",
-]

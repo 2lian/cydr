@@ -2,11 +2,17 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pytest
+import pyximport
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit import Time
-from xcdrjit.every_supported_cython import (
+from ..schema import Time
+pyximport.install(
+    language_level=3,
+    setup_args={"include_dirs": np.get_include()},
+)
+
+from xcdrjit._every_supported_cython import (
     compute_serialized_size_every_supported_schema,
     deserialize_every_supported_schema,
     serialize_every_supported_schema,
@@ -333,3 +339,13 @@ def test_deserialize_every_supported_schema_roundtrips_against_cyclone(build_val
     assert np.array_equal(roundtrip_values["float64_array"], values["float64_array"])
     assert roundtrip_values["text_array"] == values["text_array"]
     assert roundtrip_values["text_sequence"] == values["text_sequence"]
+
+
+def test_deserialize_every_supported_schema_returns_copies_for_numeric_collections() -> None:
+    values = non_default_inputs()
+
+    cyclone_bytes = serialize_cyclone(values)
+    decoded = deserialize_every_supported_schema(cyclone_bytes)
+
+    assert decoded["bool_sequence"].flags["OWNDATA"]
+    assert decoded["float64_array"].flags["OWNDATA"]

@@ -4,10 +4,9 @@ import numpy as np
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit import Time
 from xcdrjit.idl import (
     array,
-    flatten_cython_fields,
+    flatten_schema_fields,
     flatten_cython_value_list,
     float64,
     generate_cython_serializer_code,
@@ -17,8 +16,10 @@ from xcdrjit.idl import (
     sequence,
     string,
     uint32,
+    warmup_codec,
 )
-from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT
+from xcdrjit.schema_types import field_cache_token
+from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT, Time
 
 
 @dataclass
@@ -137,8 +138,8 @@ def serialize_cyclone(values: dict[str, object]) -> bytes:
     ).serialize()
 
 
-def test_flatten_cython_fields_flattens_nested_header_schema() -> None:
-    flattened = flatten_cython_fields(EVERY_SUPPORTED_SCHEMA)
+def test_flatten_schema_fields_flattens_nested_header_schema() -> None:
+    flattened = flatten_schema_fields(EVERY_SUPPORTED_SCHEMA)
 
     assert flattened == EVERY_SUPPORTED_SCHEMA_FLAT
     assert list(flattened)[13:16] == [
@@ -146,8 +147,8 @@ def test_flatten_cython_fields_flattens_nested_header_schema() -> None:
         "header_stamp_nanosec",
         "header_frame_id",
     ]
-    assert flattened["header_stamp_sec"].cache_token == "int32"
-    assert flattened["header_frame_id"].cache_token == "string"
+    assert field_cache_token(flattened["header_stamp_sec"]) == "int32"
+    assert field_cache_token(flattened["header_frame_id"]) == "string"
 
 
 def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> None:
@@ -188,9 +189,9 @@ def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> N
 
 
 def test_generate_cython_serializer_code_renders_expected_lines() -> None:
-    fields = flatten_cython_fields(EVERY_SUPPORTED_SCHEMA)
-    assert fields["header_stamp_sec"].cache_token == "int32"
-    assert fields["header_frame_id"].cache_token == "string"
+    fields = flatten_schema_fields(EVERY_SUPPORTED_SCHEMA)
+    assert field_cache_token(fields["header_stamp_sec"]) == "int32"
+    assert field_cache_token(fields["header_frame_id"]) == "string"
 
     serializer_name = "generated_every_supported_schema"
     source = generate_cython_serializer_code(serializer_name, EVERY_SUPPORTED_SCHEMA)
@@ -258,6 +259,23 @@ def test_load_cython_deserializer_roundtrips_cyclone_bytes() -> None:
     assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
     assert np.array_equal(decoded["uint32_array"], values["uint32_array"])
     assert decoded["text_array"] == values["text_array"]
+
+
+def test_warmup_codec_supports_nested_dict_values() -> None:
+    values = build_values()
+
+    codec = warmup_codec(values, EVERY_SUPPORTED_SCHEMA)
+    expected = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+
+    assert codec.schema_hash == expected.schema_hash
+    assert codec.module_name == expected.module_name
+
+
+def test_warmup_codec_requires_schema_for_nested_dict_values() -> None:
+    values = build_values()
+
+    with np.testing.assert_raises(TypeError):
+        warmup_codec(values)
 
 
 def test_serializer_accepts_flat_value_list() -> None:

@@ -4,13 +4,12 @@ import numpy as np
 import pytest
 
 from cyclonedds_idl import IdlStruct, types
-from xcdrjit import Time
 from xcdrjit.idl import (
     get_codec_for,
     schema_type_hash,
 )
 from ..cache import SCHEMA_CACHE_DIR
-from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA
+from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA, Time
 
 
 @dataclass

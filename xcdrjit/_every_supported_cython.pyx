@@ -131,6 +131,9 @@ cdef inline tuple read_primitive_array_object(
     if count > 0:
         pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
         require_available(data.shape[0], pos, byte_count)
+        # Keep numeric collections owned by the returned ndarray. A future
+        # zero-copy experiment can switch this back to a Python memoryview
+        # slice here, but the view semantics make payload lifetime more subtle.
         return np.frombuffer(data, dtype=dtype, count=count, offset=pos).copy(), pos + byte_count
     return np.empty(0, dtype=dtype), pos
 

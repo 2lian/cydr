@@ -1,21 +1,27 @@
-from __future__ import annotations
-
 """Helpers for generating Cython codec modules from nested Python schemas."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .schema_types import (
-    ArrayField,
+    ArrayType,
     FlatField,
     NestedSchemaFields,
-    PrimitiveKind,
-    ScalarField,
-    SequenceField,
+    SequenceType,
+    boolean,
+    float32,
+    float64,
     flatten_schema_fields,
+    int8,
+    int16,
+    int32,
+    int64,
+    string,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
 )
-
-NestedCythonFields = NestedSchemaFields
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +37,8 @@ class PrimitiveCodegenInfo:
     pointer_expr: str
 
 
-PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
-    PrimitiveKind.BOOLEAN: PrimitiveCodegenInfo(
+PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
+    boolean: PrimitiveCodegenInfo(
         scalar_decl="bint {name}",
         view_decl="const cnp.npy_bool[::1] {name}",
         scalar_advance="advance_boolean_field(pos)",
@@ -43,7 +49,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.bool_",
         pointer_expr="bool_sequence_ptr({name})",
     ),
-    PrimitiveKind.UINT8: PrimitiveCodegenInfo(
+    uint8: PrimitiveCodegenInfo(
         scalar_decl="uint8_t {name}",
         view_decl="const uint8_t[::1] {name}",
         scalar_advance="advance_uint8_field(pos, align_offset)",
@@ -54,7 +60,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.uint8",
         pointer_expr="uint8_view_ptr({name})",
     ),
-    PrimitiveKind.INT8: PrimitiveCodegenInfo(
+    int8: PrimitiveCodegenInfo(
         scalar_decl="int8_t {name}",
         view_decl="const int8_t[::1] {name}",
         scalar_advance="advance_int8_field(pos, align_offset)",
@@ -65,7 +71,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.int8",
         pointer_expr="int8_sequence_ptr({name})",
     ),
-    PrimitiveKind.INT16: PrimitiveCodegenInfo(
+    int16: PrimitiveCodegenInfo(
         scalar_decl="int16_t {name}",
         view_decl="const int16_t[::1] {name}",
         scalar_advance="advance_int16_field(pos, align_offset)",
@@ -76,7 +82,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.int16",
         pointer_expr="int16_sequence_ptr({name})",
     ),
-    PrimitiveKind.UINT16: PrimitiveCodegenInfo(
+    uint16: PrimitiveCodegenInfo(
         scalar_decl="uint16_t {name}",
         view_decl="const uint16_t[::1] {name}",
         scalar_advance="advance_uint16_field(pos, align_offset)",
@@ -87,7 +93,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.uint16",
         pointer_expr="uint16_view_ptr({name})",
     ),
-    PrimitiveKind.INT32: PrimitiveCodegenInfo(
+    int32: PrimitiveCodegenInfo(
         scalar_decl="int32_t {name}",
         view_decl="const int32_t[::1] {name}",
         scalar_advance="advance_int32_field(pos, align_offset)",
@@ -98,7 +104,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.int32",
         pointer_expr="int32_sequence_ptr({name})",
     ),
-    PrimitiveKind.UINT32: PrimitiveCodegenInfo(
+    uint32: PrimitiveCodegenInfo(
         scalar_decl="uint32_t {name}",
         view_decl="const uint32_t[::1] {name}",
         scalar_advance="advance_uint32_field(pos, align_offset)",
@@ -109,7 +115,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.uint32",
         pointer_expr="uint32_view_ptr({name})",
     ),
-    PrimitiveKind.INT64: PrimitiveCodegenInfo(
+    int64: PrimitiveCodegenInfo(
         scalar_decl="int64_t {name}",
         view_decl="const int64_t[::1] {name}",
         scalar_advance="advance_int64_field(pos, align_offset)",
@@ -120,7 +126,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.int64",
         pointer_expr="int64_sequence_ptr({name})",
     ),
-    PrimitiveKind.UINT64: PrimitiveCodegenInfo(
+    uint64: PrimitiveCodegenInfo(
         scalar_decl="uint64_t {name}",
         view_decl="const uint64_t[::1] {name}",
         scalar_advance="advance_uint64_field(pos, align_offset)",
@@ -131,7 +137,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.uint64",
         pointer_expr="uint64_view_ptr({name})",
     ),
-    PrimitiveKind.FLOAT32: PrimitiveCodegenInfo(
+    float32: PrimitiveCodegenInfo(
         scalar_decl="cnp.float32_t {name}",
         view_decl="const cnp.float32_t[::1] {name}",
         scalar_advance="advance_float32_field(pos, align_offset)",
@@ -142,7 +148,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.float32",
         pointer_expr="float32_sequence_ptr({name})",
     ),
-    PrimitiveKind.FLOAT64: PrimitiveCodegenInfo(
+    float64: PrimitiveCodegenInfo(
         scalar_decl="cnp.float64_t {name}",
         view_decl="const cnp.float64_t[::1] {name}",
         scalar_advance="advance_float64_field(pos, align_offset)",
@@ -153,7 +159,7 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
         dtype_expr="np.float64",
         pointer_expr="float64_sequence_ptr({name})",
     ),
-    PrimitiveKind.STRING: PrimitiveCodegenInfo(
+    string: PrimitiveCodegenInfo(
         scalar_decl="bytes {name}",
         view_decl="list {name}",
         scalar_advance="advance_string_field(pos, {name}, align_offset)",
@@ -166,19 +172,14 @@ PRIMITIVE_CODEGEN: dict[PrimitiveKind, PrimitiveCodegenInfo] = {
     ),
 }
 
-
-def flatten_cython_fields(
-    fields: NestedSchemaFields,
-    *,
-    prefix: str = "",
-) -> dict[str, FlatField]:
-    """Flatten a nested schema into `snake_case` field names."""
-    return flatten_schema_fields(fields, prefix=prefix)
-
-
 def _field_declaration(field_name: str, field_spec: FlatField) -> str:
-    info = PRIMITIVE_CODEGEN[field_spec.primitive_kind]
-    if isinstance(field_spec, ScalarField):
+    primitive_type = (
+        field_spec.element_type
+        if isinstance(field_spec, (ArrayType, SequenceType))
+        else field_spec
+    )
+    info = PRIMITIVE_CODEGEN[primitive_type]
+    if not isinstance(field_spec, (ArrayType, SequenceType)):
         return info.scalar_decl.format(name=field_name)
     return info.view_decl.format(name=field_name)
 
@@ -190,24 +191,29 @@ def _signature_lines(fields: Mapping[str, FlatField]) -> str:
     )
 
 
-def _array_length_expr(field_name: str, primitive_kind: PrimitiveKind) -> str:
-    if primitive_kind is PrimitiveKind.STRING:
+def _array_length_expr(field_name: str, primitive_type: object) -> str:
+    if primitive_type is string:
         return f"PyList_GET_SIZE({field_name})"
     return f"{field_name}.shape[0]"
 
 
 def _compute_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
-    info = PRIMITIVE_CODEGEN[field_spec.primitive_kind]
+    primitive_type = (
+        field_spec.element_type
+        if isinstance(field_spec, (ArrayType, SequenceType))
+        else field_spec
+    )
+    info = PRIMITIVE_CODEGEN[primitive_type]
 
-    if isinstance(field_spec, ScalarField):
+    if not isinstance(field_spec, (ArrayType, SequenceType)):
         return [f"    pos = {info.scalar_advance.format(name=field_name)}"]
 
-    if isinstance(field_spec, ArrayField):
-        length_expr = _array_length_expr(field_name, field_spec.primitive_kind)
+    if isinstance(field_spec, ArrayType):
+        length_expr = _array_length_expr(field_name, field_spec.element_type)
         lines = [
             f'    require_fixed_length({length_expr}, {field_spec.length}, "{field_name}")'
         ]
-        if field_spec.primitive_kind is PrimitiveKind.STRING:
+        if field_spec.element_type is string:
             lines.append(
                 f"    pos = advance_string_array_position(pos, {field_name}, align_offset)"
             )
@@ -218,7 +224,7 @@ def _compute_lines_for_field(field_name: str, field_spec: FlatField) -> list[str
             )
         return lines
 
-    if field_spec.primitive_kind is PrimitiveKind.STRING:
+    if primitive_type is string:
         return [f"    pos = advance_string_sequence_position(pos, {field_name}, align_offset)"]
 
     return [
@@ -235,17 +241,22 @@ def _compute_body_lines(fields: Mapping[str, FlatField]) -> str:
 
 
 def _serialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
-    info = PRIMITIVE_CODEGEN[field_spec.primitive_kind]
+    primitive_type = (
+        field_spec.element_type
+        if isinstance(field_spec, (ArrayType, SequenceType))
+        else field_spec
+    )
+    info = PRIMITIVE_CODEGEN[primitive_type]
 
-    if isinstance(field_spec, ScalarField):
+    if not isinstance(field_spec, (ArrayType, SequenceType)):
         return [f"    pos = {info.scalar_write.format(name=field_name)}"]
 
-    if isinstance(field_spec, ArrayField):
-        length_expr = _array_length_expr(field_name, field_spec.primitive_kind)
+    if isinstance(field_spec, ArrayType):
+        length_expr = _array_length_expr(field_name, field_spec.element_type)
         lines = [
             f'    require_fixed_length({length_expr}, {field_spec.length}, "{field_name}")'
         ]
-        if field_spec.primitive_kind is PrimitiveKind.STRING:
+        if field_spec.element_type is string:
             lines.append(
                 f"    pos = write_string_array(buffer, pos, {field_name}, align_offset)"
             )
@@ -257,7 +268,7 @@ def _serialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[s
             )
         return lines
 
-    if field_spec.primitive_kind is PrimitiveKind.STRING:
+    if primitive_type is string:
         return [f"    pos = write_string_sequence(buffer, pos, {field_name}, align_offset)"]
 
     return [
@@ -274,7 +285,7 @@ def _serialize_body_lines(fields: Mapping[str, FlatField]) -> str:
     return "\n".join(lines)
 
 
-def _argument_names(fields: Mapping[str, FlatField], *, indent: int) -> str:
+def _argument_names(fields: Mapping[str, FlatField], indent: int) -> str:
     padding = " " * indent
     return ",\n".join(f"{padding}{field_name}" for field_name in fields)
 
@@ -284,13 +295,18 @@ def _deserialize_declarations(fields: Mapping[str, FlatField]) -> str:
 
 
 def _deserialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
-    info = PRIMITIVE_CODEGEN[field_spec.primitive_kind]
+    primitive_type = (
+        field_spec.element_type
+        if isinstance(field_spec, (ArrayType, SequenceType))
+        else field_spec
+    )
+    info = PRIMITIVE_CODEGEN[primitive_type]
 
-    if isinstance(field_spec, ScalarField):
+    if not isinstance(field_spec, (ArrayType, SequenceType)):
         return [f"    {field_name}, pos = {info.scalar_read.format(name=field_name)}"]
 
-    if isinstance(field_spec, ArrayField):
-        if field_spec.primitive_kind is PrimitiveKind.STRING:
+    if isinstance(field_spec, ArrayType):
+        if field_spec.element_type is string:
             return [
                 f"    {field_name}, pos = read_string_array_object(data, pos, {field_spec.length}, align_offset)"
             ]
@@ -301,7 +317,7 @@ def _deserialize_lines_for_field(field_name: str, field_spec: FlatField) -> list
             f"align_offset, {info.dtype_expr})"
         ]
 
-    if field_spec.primitive_kind is PrimitiveKind.STRING:
+    if primitive_type is string:
         return [
             f"    {field_name}, pos = read_string_sequence_object(data, pos, align_offset)"
         ]
@@ -335,7 +351,7 @@ def generate_cython_serializer_code(
     """Return generated `.pyx` source for a serializer/deserializer pair."""
     return generate_cython_serializer_module(
         serializer_name,
-        flatten_cython_fields(schema),
+        flatten_schema_fields(schema),
     )
 
 
@@ -347,7 +363,7 @@ def generate_cython_serializer_module(
     signature = _signature_lines(fields)
     compute_body = _compute_body_lines(fields)
     serialize_body = _serialize_body_lines(fields)
-    call_args = _argument_names(fields, indent=8)
+    call_args = _argument_names(fields, 8)
     deserialize_declarations = _deserialize_declarations(fields)
     deserialize_body = _deserialize_body_lines(fields)
     return_tuple = _return_tuple_lines(fields)
@@ -480,11 +496,3 @@ cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):
     require_consumed(data, pos)
 {return_tuple}
 '''
-
-
-__all__ = [
-    "NestedCythonFields",
-    "flatten_cython_fields",
-    "generate_cython_serializer_code",
-    "generate_cython_serializer_module",
-]

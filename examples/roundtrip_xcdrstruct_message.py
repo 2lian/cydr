@@ -1,11 +1,13 @@
 """End-to-end xcdrjit example using XcdrStruct."""
 
+import os
 import time
 from pprint import pprint
 
 import numpy as np
 
 from xcdrjit.idl import (
+    CYTHON_CACHE_DIR,
     XcdrStruct,
     array,
     float64,
@@ -13,6 +15,7 @@ from xcdrjit.idl import (
     sequence,
     string,
     uint32,
+    warmup_codec,
 )
 
 
@@ -32,14 +35,15 @@ class JointStateLite(XcdrStruct):
     position: sequence(float64)
     effort: array(float64, 3)
 
-class Something(XcdrStruct):
-    stamp: Stamp
-    frame_id: uint32
-
-
-
 
 def main() -> None:
+    print("Compiling or loading schema...")
+    print(f"Cache dir: {CYTHON_CACHE_DIR}")
+    print("Override at process start with XCDRJIT_CACHE_DIR=/path/to/cache")
+    _ = JointStateLite._get_codec()
+    print("Done")
+
+    print("Creating data...")
     message = JointStateLite(
         header=Header(
             stamp=Stamp(sec=np.int32(17000), nanosec=np.uint32(1234)),
@@ -49,30 +53,44 @@ def main() -> None:
         position=np.array([0.5, 1.5, 2.5], dtype=np.float64),
         effort=np.array([3.5, 4.5, 5.5], dtype=np.float64),
     )
+    print("Done")
 
-    # First call compiles and caches the codec. Warm it once so the timings
-    # below reflect steady-state serialization and deserialization.
-    _ = message.serialize()
+    print("Warming one full roundtrip...")
+    _ = warmup_codec(message)
+    print("Done")
 
+    print("Serializing...")
     started = time.perf_counter()
     payload = message.serialize()
     serialize_elapsed_us = (time.perf_counter() - started) * 1e6
+    print("Done")
 
+    print("Deserializing...")
     started = time.perf_counter()
     decoded_message = JointStateLite.deserialize(payload)
     deserialize_elapsed_us = (time.perf_counter() - started) * 1e6
+    print("Done")
 
-    roundtrip_stable = (
-        bytes(decoded_message.serialize()) == bytes(payload)
+    print("Verifying...")
+    roundtrip_stable = bytes(decoded_message.serialize()) == bytes(payload)
+    print(f"Roundtrip stable: {roundtrip_stable}")
+    if "XCDRJIT_CACHE_DIR" in os.environ:
+        print(f"XCDRJIT_CACHE_DIR={os.environ['XCDRJIT_CACHE_DIR']}")
+    else:
+        print("XCDRJIT_CACHE_DIR is not set")
+
+    print(f"Payload size: {len(payload):_} bytes")
+    print(
+        f"serialize: {serialize_elapsed_us:.2f} us "
+        f"({len(payload)/serialize_elapsed_us:_.1f} MB/s)"
     )
-
-    print(f"payload size: {len(payload)} bytes")
-    print(f"serialize: {serialize_elapsed_us:.2f} us")
-    print(f"deserialize: {deserialize_elapsed_us:.2f} us")
-    print(f"roundtrip stable: {roundtrip_stable}")
+    print(
+        f"deserialize: {deserialize_elapsed_us:.2f} us "
+        f"({len(payload)/deserialize_elapsed_us:_.1f} MB/s)"
+    )
     print()
 
-    print("decoded message:")
+    print("decoded values:")
     pprint(decoded_message)
 
 

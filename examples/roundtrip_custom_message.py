@@ -16,6 +16,7 @@ from xcdrjit.idl import (
     sequence,
     string,
     uint32,
+    warmup_codec,
 )
 
 ARR_SIZE = 100_000
@@ -58,6 +59,10 @@ def main() -> None:
     }
     print("Done")
 
+    print("Warming one full roundtrip...")
+    _ = warmup_codec(values, SCHEMA)
+    print("Done")
+
     print("Serializing...")
     started = time.perf_counter()
     payload = serialize(values)
@@ -72,17 +77,12 @@ def main() -> None:
 
     print("Verifying...")
     is_stable = serialize(decoded) == payload
-    # is_stable = decoded == values
     print(f"Roundtrip stable: {is_stable}")
     if "XCDRJIT_CACHE_DIR" in os.environ:
         print(f"XCDRJIT_CACHE_DIR={os.environ['XCDRJIT_CACHE_DIR']}")
     else:
         print("XCDRJIT_CACHE_DIR is not set")
 
-    # pprint(bytes(payload).hex(" "))
-    print("decoded values:")
-    pprint(decoded, sort_dicts=False)
-    print()
     print(f"Payload size: {len(payload):_} bytes")
     print(
         f"serialize: {serialize_elapsed_us:.2f} us "
@@ -92,6 +92,9 @@ def main() -> None:
         f"deserialize: {deserialize_elapsed_us:.2f} us "
         f"({len(payload)/deserialize_elapsed_us:_.1f} MB/s)"
     )
+    print()
+    print("decoded values:")
+    pprint(decoded, sort_dicts=False)
 
 
 if __name__ == "__main__":

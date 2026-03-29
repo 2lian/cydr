@@ -1,10 +1,7 @@
 """Schema descriptor helpers used by xcdrjit code generation."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import TypeAlias
 
 import numpy as np
@@ -39,6 +36,21 @@ float64: TypeAlias = np.float64
 #: XCDR string field. Runtime values are UTF-8 ``bytes``.
 string: TypeAlias = bytes
 
+type PrimitiveSchemaType = (
+    type[boolean]
+    | type[uint8]
+    | type[int8]
+    | type[int16]
+    | type[uint16]
+    | type[int32]
+    | type[uint32]
+    | type[int64]
+    | type[uint64]
+    | type[float32]
+    | type[float64]
+    | type[bytes]
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ArrayType:
@@ -48,7 +60,7 @@ class ArrayType:
     types, or a ``list[bytes]`` for ``string``.
     """
 
-    element_type: object
+    element_type: PrimitiveSchemaType
     length: int
 
 
@@ -60,7 +72,7 @@ class SequenceType:
     types, or a ``list[bytes]`` for ``string``.
     """
 
-    element_type: object
+    element_type: PrimitiveSchemaType
 
 
 def array(element_type: object, length: int) -> ArrayType:
@@ -71,8 +83,10 @@ def array(element_type: object, length: int) -> ArrayType:
     """
     if not isinstance(length, int) or length < 0:
         raise ValueError("array length must be a non-negative integer.")
-    _primitive_kind_from_public_type(element_type)
-    return ArrayType(element_type=element_type, length=length)
+    return ArrayType(
+        element_type=_primitive_type_from_public_type(element_type),
+        length=length,
+    )
 
 
 def sequence(element_type: object) -> SequenceType:
@@ -80,178 +94,158 @@ def sequence(element_type: object) -> SequenceType:
 
     ``element_type`` must be one of the exported primitive schema tokens.
     """
-    _primitive_kind_from_public_type(element_type)
-    return SequenceType(element_type=element_type)
+    return SequenceType(
+        element_type=_primitive_type_from_public_type(element_type),
+    )
 
 
-class PrimitiveKind(StrEnum):
-    BOOLEAN = "boolean"
-    UINT8 = "uint8"
-    INT8 = "int8"
-    INT16 = "int16"
-    UINT16 = "uint16"
-    INT32 = "int32"
-    UINT32 = "uint32"
-    INT64 = "int64"
-    UINT64 = "uint64"
-    FLOAT32 = "float32"
-    FLOAT64 = "float64"
-    STRING = "string"
+type FlatField = PrimitiveSchemaType | ArrayType | SequenceType
+type NestedSchemaFields = Mapping[
+    str,
+    PrimitiveSchemaType | ArrayType | SequenceType | NestedSchemaFields,
+]
 
 
-@dataclass(frozen=True, slots=True)
-class ScalarField:
-    primitive_kind: PrimitiveKind
-
-    @property
-    def cache_token(self) -> str:
-        return self.primitive_kind.value
-
-
-@dataclass(frozen=True, slots=True)
-class ArrayField:
-    primitive_kind: PrimitiveKind
-    length: int
-
-    @property
-    def cache_token(self) -> str:
-        return f"array:{self.primitive_kind.value}:{self.length}"
-
-
-@dataclass(frozen=True, slots=True)
-class SequenceField:
-    primitive_kind: PrimitiveKind
-
-    @property
-    def cache_token(self) -> str:
-        return f"sequence:{self.primitive_kind.value}"
-
-
-FlatField = ScalarField | ArrayField | SequenceField
-NestedSchemaFieldValue = object | Mapping[str, object]
-NestedSchemaFields = Mapping[str, NestedSchemaFieldValue]
-
-
-_PRIMITIVE_KIND_BY_PUBLIC_TYPE: dict[object, PrimitiveKind] = {
-    boolean: PrimitiveKind.BOOLEAN,
-    byte: PrimitiveKind.UINT8,
-    int8: PrimitiveKind.INT8,
-    uint8: PrimitiveKind.UINT8,
-    int16: PrimitiveKind.INT16,
-    uint16: PrimitiveKind.UINT16,
-    int32: PrimitiveKind.INT32,
-    uint32: PrimitiveKind.UINT32,
-    int64: PrimitiveKind.INT64,
-    uint64: PrimitiveKind.UINT64,
-    float32: PrimitiveKind.FLOAT32,
-    float64: PrimitiveKind.FLOAT64,
-    string: PrimitiveKind.STRING,
-}
-
-_LEGACY_FIELD_BY_VALUE: dict[str, FlatField] = {
-    "boolean": ScalarField(PrimitiveKind.BOOLEAN),
-    "byte": ScalarField(PrimitiveKind.UINT8),
-    "int8": ScalarField(PrimitiveKind.INT8),
-    "uint8": ScalarField(PrimitiveKind.UINT8),
-    "int16": ScalarField(PrimitiveKind.INT16),
-    "uint16": ScalarField(PrimitiveKind.UINT16),
-    "int32": ScalarField(PrimitiveKind.INT32),
-    "uint32": ScalarField(PrimitiveKind.UINT32),
-    "int64": ScalarField(PrimitiveKind.INT64),
-    "uint64": ScalarField(PrimitiveKind.UINT64),
-    "float32": ScalarField(PrimitiveKind.FLOAT32),
-    "float64": ScalarField(PrimitiveKind.FLOAT64),
-    "string": ScalarField(PrimitiveKind.STRING),
-    "bool_sequence": SequenceField(PrimitiveKind.BOOLEAN),
-    "byte_array_3": ArrayField(PrimitiveKind.UINT8, 3),
-    "int8_sequence": SequenceField(PrimitiveKind.INT8),
-    "uint8_array_3": ArrayField(PrimitiveKind.UINT8, 3),
-    "int16_sequence": SequenceField(PrimitiveKind.INT16),
-    "uint16_array_2": ArrayField(PrimitiveKind.UINT16, 2),
-    "int32_sequence": SequenceField(PrimitiveKind.INT32),
-    "uint32_array_2": ArrayField(PrimitiveKind.UINT32, 2),
-    "int64_sequence": SequenceField(PrimitiveKind.INT64),
-    "uint64_array_2": ArrayField(PrimitiveKind.UINT64, 2),
-    "float32_sequence": SequenceField(PrimitiveKind.FLOAT32),
-    "float64_sequence": SequenceField(PrimitiveKind.FLOAT64),
-    "float64_array_2": ArrayField(PrimitiveKind.FLOAT64, 2),
-    "text_array_2": ArrayField(PrimitiveKind.STRING, 2),
-    "text_sequence": SequenceField(PrimitiveKind.STRING),
+_TOKEN_BY_TYPE: dict[PrimitiveSchemaType, str] = {
+    boolean: "boolean",
+    byte: "uint8",
+    int8: "int8",
+    uint8: "uint8",
+    int16: "int16",
+    uint16: "uint16",
+    int32: "int32",
+    uint32: "uint32",
+    int64: "int64",
+    uint64: "uint64",
+    float32: "float32",
+    float64: "float64",
+    string: "string",
 }
 
 
-def _primitive_kind_from_public_type(element_type: object) -> PrimitiveKind:
-    try:
-        return _PRIMITIVE_KIND_BY_PUBLIC_TYPE[element_type]
-    except KeyError as exc:
-        raise TypeError(
-            "Unsupported primitive schema type. "
-            "Use one of: boolean, byte, int8, uint8, int16, uint16, "
-            "int32, uint32, int64, uint64, float32, float64, string."
-        ) from exc
+def _primitive_type_from_public_type(element_type: type) -> PrimitiveSchemaType:
+    """Validate and return one public primitive schema token.
 
+    Args:
+        element_type: One of the exported primitive schema tokens such as
+            ``int32``, ``float64``, or ``string``.
 
-def normalize_schema_field(field_value: object) -> FlatField:
-    """Normalize one leaf schema value into an internal flat field descriptor."""
-    if isinstance(field_value, ArrayType):
-        return ArrayField(
-            primitive_kind=_primitive_kind_from_public_type(field_value.element_type),
-            length=field_value.length,
-        )
-    if isinstance(field_value, SequenceType):
-        return SequenceField(
-            primitive_kind=_primitive_kind_from_public_type(field_value.element_type),
-        )
-    if field_value in _PRIMITIVE_KIND_BY_PUBLIC_TYPE:
-        return ScalarField(_primitive_kind_from_public_type(field_value))
-    if isinstance(field_value, str) and field_value in _LEGACY_FIELD_BY_VALUE:
-        return _LEGACY_FIELD_BY_VALUE[field_value]
+    Returns:
+        The same token, narrowed to ``PrimitiveSchemaType`` for internal use.
+
+    Raises:
+        TypeError: If ``element_type`` is not one of the supported primitive
+            schema tokens.
+    """
+    if element_type in _TOKEN_BY_TYPE:
+        return element_type
     raise TypeError(
-        f"Unsupported field schema value: {field_value!r}. "
+        "Unsupported primitive schema type. "
+        "Use one of: boolean, byte, int8, uint8, int16, uint16, "
+        "int32, uint32, int64, uint64, float32, float64, string."
+    )
+
+
+def _token(element_type: PrimitiveSchemaType) -> str:
+    """Return the stable internal token string for one primitive schema type.
+
+    Args:
+        element_type: One validated primitive schema token.
+
+    Returns:
+        A short stable token string used for internal cache keys and code
+        generation decisions, such as ``"int32"`` or ``"string"``.
+    """
+    return _TOKEN_BY_TYPE[element_type]
+
+
+def field_cache_token(field_schema: FlatField) -> str:
+    """Return the stable cache token for one flattened field schema.
+
+    Args:
+        field_schema: One flattened leaf schema. This may be one primitive
+            schema token, one ``ArrayType``, or one ``SequenceType``.
+
+    Returns:
+        A stable token string used in schema hashing and code generation cache
+        keys.
+    """
+    if isinstance(field_schema, ArrayType):
+        return f"array:{_token(field_schema.element_type)}:{field_schema.length}"
+    if isinstance(field_schema, SequenceType):
+        return f"sequence:{_token(field_schema.element_type)}"
+    return _token(field_schema)
+
+
+def normalize_schema_field(field_schema: object) -> FlatField:
+    """Normalize one leaf schema value into one canonical field schema.
+
+    Args:
+        field_schema: One non-nested schema leaf. This may be:
+            - one primitive schema token such as ``int32`` or ``string``
+            - ``array(element_type, length)``
+            - ``sequence(element_type)``
+
+    Returns:
+        A canonical flattened field schema:
+            - one primitive schema token for scalar leaves
+            - one ``ArrayType`` for fixed-size arrays
+            - one ``SequenceType`` for variable-size sequences
+
+    Raises:
+        TypeError: If ``field_schema`` is not a supported leaf schema value.
+    """
+    if isinstance(field_schema, ArrayType):
+        return ArrayType(
+            element_type=_primitive_type_from_public_type(field_schema.element_type),
+            length=field_schema.length,
+        )
+    if isinstance(field_schema, SequenceType):
+        return SequenceType(
+            element_type=_primitive_type_from_public_type(field_schema.element_type),
+        )
+    primitive_token = field_schema
+    if primitive_token in _TOKEN_BY_TYPE:
+        return _primitive_type_from_public_type(primitive_token)
+    raise TypeError(
+        f"Unsupported field schema value: {field_schema!r}. "
         "Use a primitive type token, array(...), sequence(...), or a nested dict."
     )
 
 
 def flatten_schema_fields(
     fields: NestedSchemaFields,
-    *,
     prefix: str = "",
 ) -> dict[str, FlatField]:
-    """Flatten a nested schema into `snake_case` field names."""
+    """Flatten one nested schema mapping into flat ``snake_case`` field names.
+
+    Args:
+        fields: A nested schema mapping. Values may be primitive schema tokens,
+            ``array(...)``, ``sequence(...)``, or nested schema mappings.
+        prefix: Optional field-name prefix used during recursive flattening.
+
+    Returns:
+        A flat mapping from flattened field name to normalized internal field
+        descriptor. Nested fields are joined with underscores, so
+        ``{"header": {"stamp": {"sec": int32}}}`` becomes
+        ``{"header_stamp_sec": int32}``.
+
+    Raises:
+        TypeError: If ``fields`` is not a mapping, if a field name is not a
+            string, or if one leaf schema value is unsupported.
+    """
+    if not isinstance(fields, Mapping):
+        raise TypeError(
+            f"Schema must be a mapping from field name to field schema, got {type(fields)!r}."
+        )
+
     flattened: dict[str, FlatField] = {}
     for field_name, field_value in fields.items():
+        if not isinstance(field_name, str):
+            raise TypeError(f"Schema field names must be strings, got {field_name!r}.")
         full_name = f"{prefix}_{field_name}" if prefix else field_name
         if isinstance(field_value, Mapping):
             flattened.update(flatten_schema_fields(field_value, prefix=full_name))
         else:
             flattened[full_name] = normalize_schema_field(field_value)
     return flattened
-
-
-__all__ = [
-    "ArrayField",
-    "ArrayType",
-    "FlatField",
-    "NestedSchemaFields",
-    "PrimitiveKind",
-    "ScalarField",
-    "SequenceField",
-    "SequenceType",
-    "array",
-    "boolean",
-    "byte",
-    "flatten_schema_fields",
-    "float32",
-    "float64",
-    "int8",
-    "int16",
-    "int32",
-    "int64",
-    "normalize_schema_field",
-    "sequence",
-    "string",
-    "uint8",
-    "uint16",
-    "uint32",
-    "uint64",
-]

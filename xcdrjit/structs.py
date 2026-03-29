@@ -1,7 +1,5 @@
 """msgspec.Struct-based helpers for declaring xcdrjit messages."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Self, get_type_hints
@@ -9,14 +7,18 @@ from typing import ClassVar, Self, get_type_hints
 import msgspec
 
 from ._runtime import Codec, get_codec_for
-from .cython_generator import NestedCythonFields, flatten_cython_fields
-from .schema_types import FlatField, normalize_schema_field
+from .schema_types import (
+    FlatField,
+    NestedSchemaFields,
+    flatten_schema_fields,
+    normalize_schema_field,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class _SchemaState:
-    nested_structs_by_index: dict[int, type[XcdrStruct]]
-    schema_dict: NestedCythonFields
+    nested_structs_by_index: dict[int, type["XcdrStruct"]]
+    schema_dict: NestedSchemaFields
     flat_schema: dict[str, FlatField]
 
 
@@ -44,7 +46,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
             return cached
 
         resolved_annotations = get_type_hints(cls, include_extras=True)
-        nested_structs_by_index: dict[int, type[XcdrStruct]] = {}
+        nested_structs_by_index: dict[int, type["XcdrStruct"]] = {}
         schema: dict[str, object] = {}
 
         for index, field_name in enumerate(cls.__struct_fields__):
@@ -69,7 +71,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
                 ) from exc
             schema[field_name] = annotation
 
-        flat_schema = flatten_cython_fields(schema)
+        flat_schema = flatten_schema_fields(schema)
 
         cached = _SchemaState(
             nested_structs_by_index=nested_structs_by_index,
@@ -109,7 +111,8 @@ class XcdrStruct(msgspec.Struct, gc=False):
     def _from_flat_values(cls, values: list[object] | tuple[object, ...]) -> Self:
         """Construct this struct from the flattened runtime value representation."""
         state = cls._schema_state()
-        field_values = list(values)
+        
+        field_values = list(values) if not isinstance(values, list) else values
 
         for index, nested_struct in state.nested_structs_by_index.items():
             nested_width = len(nested_struct._schema_state().flat_schema)
@@ -119,10 +122,11 @@ class XcdrStruct(msgspec.Struct, gc=False):
                 nested_struct._from_flat_values(nested_values)
             ]
 
-        if len(field_values) < len(cls.__struct_fields__):
-            raise ValueError("Flat value list is shorter than the schema.")
-        if len(field_values) > len(cls.__struct_fields__):
-            raise ValueError("Flat value list is longer than the schema.")
+        if len(field_values) != len(cls.__struct_fields__):
+            if len(field_values) < len(cls.__struct_fields__):
+                raise ValueError("Flat value list is shorter than the schema.")
+            if len(field_values) > len(cls.__struct_fields__):
+                raise ValueError("Flat value list is longer than the schema.")
         return cls(*field_values)
 
     @classmethod
@@ -159,6 +163,3 @@ class XcdrStruct(msgspec.Struct, gc=False):
     def deserialize(cls, data: object) -> Self:
         """Deserialize one payload into this struct type."""
         return cls._from_flat_values(cls._get_codec().deserialize(data, flat=True))
-
-
-__all__ = ["XcdrStruct"]

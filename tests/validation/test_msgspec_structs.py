@@ -6,7 +6,7 @@ from xcdrjit.idl import (
     assert_messages_equal,
     boolean,
     byte,
-    flatten_cython_fields,
+    flatten_schema_fields,
     flatten_cython_value_list,
     float32,
     float64,
@@ -20,6 +20,7 @@ from xcdrjit.idl import (
     uint16,
     uint32,
     uint64,
+    warmup_codec,
 )
 
 from ..schema import EVERY_SUPPORTED_SCHEMA, HEADER_SCHEMA
@@ -125,7 +126,7 @@ def test_xcdr_struct_schema_dict_matches_expected_schema() -> None:
 def test_xcdr_struct_flat_schema_matches_expected_flat_schema() -> None:
     assert (
         EverySupportedMessage._schema_state().flat_schema
-        == flatten_cython_fields(EVERY_SUPPORTED_SCHEMA)
+        == flatten_schema_fields(EVERY_SUPPORTED_SCHEMA)
     )
 
 
@@ -188,3 +189,20 @@ def test_xcdr_struct_public_serialize_deserialize_roundtrip() -> None:
 
     assert_messages_equal(decoded._to_message_dict(), values, EVERY_SUPPORTED_SCHEMA)
     assert bytes(decoded.serialize()) == bytes(payload)
+
+
+def test_warmup_codec_supports_xcdr_struct_values() -> None:
+    values = build_values()
+    message = EverySupportedMessage._from_message_dict(values)
+
+    codec = warmup_codec(message)
+
+    assert codec is EverySupportedMessage._get_codec()
+
+
+def test_warmup_codec_rejects_schema_for_xcdr_struct_values() -> None:
+    values = build_values()
+    message = EverySupportedMessage._from_message_dict(values)
+
+    with np.testing.assert_raises(TypeError):
+        warmup_codec(message, EVERY_SUPPORTED_SCHEMA)
