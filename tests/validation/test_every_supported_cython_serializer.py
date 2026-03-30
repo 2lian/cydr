@@ -385,6 +385,55 @@ def test_manual_serializer_accepts_list_bytes_for_string_collections() -> None:
     assert cython_bytes == cyclone_bytes
 
 
+STRING_COLLECTION_VALUES = [b"hello", "café".encode("utf-8"), "😀".encode("utf-8")]
+
+
+def _make_string_inputs_with(text_array, text_sequence) -> dict[str, object]:
+    values = non_default_inputs()
+    values["text_array"] = text_array
+    values["text_sequence"] = text_sequence
+    return values
+
+
+def _cyclone_reference_bytes() -> bytes:
+    return serialize_cyclone(
+        _make_string_inputs_with(
+            text_array=np.array(STRING_COLLECTION_VALUES[:2], dtype=np.bytes_),
+            text_sequence=np.array(STRING_COLLECTION_VALUES, dtype=np.bytes_),
+        )
+    )
+
+
+def test_string_collections_as_list_of_bytes_matches_cyclone() -> None:
+    values = _make_string_inputs_with(
+        text_array=list(STRING_COLLECTION_VALUES[:2]),
+        text_sequence=list(STRING_COLLECTION_VALUES),
+    )
+
+    assert serialize_cython(values) == _cyclone_reference_bytes()
+
+
+def test_string_collections_as_numpy_bytes_array_matches_cyclone() -> None:
+    values = _make_string_inputs_with(
+        text_array=np.array(STRING_COLLECTION_VALUES[:2], dtype=np.bytes_),
+        text_sequence=np.array(STRING_COLLECTION_VALUES, dtype=np.bytes_),
+    )
+
+    assert serialize_cython(values) == _cyclone_reference_bytes()
+
+
+def test_string_collections_as_numpy_string_dtype_matches_cyclone() -> None:
+    from numpy.dtypes import StringDType
+
+    string_dtype = StringDType()
+    values = _make_string_inputs_with(
+        text_array=np.array([s.decode("utf-8") for s in STRING_COLLECTION_VALUES[:2]], dtype=string_dtype),
+        text_sequence=np.array([s.decode("utf-8") for s in STRING_COLLECTION_VALUES], dtype=string_dtype),
+    )
+
+    assert serialize_cython(values) == _cyclone_reference_bytes()
+
+
 def test_deserialize_every_supported_schema_returns_copies_for_numeric_collections() -> None:
     values = non_default_inputs()
 

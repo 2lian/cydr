@@ -23,6 +23,39 @@ from libc.stdint cimport (
 )
 from libc.string cimport memcpy
 
+cdef extern from *:
+    """
+    #include "string.h"
+
+    /* Access NpyString API through PyArray_API without NPY_FEATURE_VERSION guard.
+     * Indices from numpy/_core/include/numpy/__multiarray_api.h (numpy 2.x).
+     */
+    static inline npy_string_allocator* _cydr_acquire_allocator(
+            const PyArray_StringDTypeObject* d) {
+        return (*(npy_string_allocator* (*)(const PyArray_StringDTypeObject*))
+                PyArray_API[316])(d);
+    }
+    static inline void _cydr_release_allocator(npy_string_allocator* a) {
+        (*(void (*)(npy_string_allocator*)) PyArray_API[318])(a);
+    }
+    static inline int _cydr_npy_string_load(
+            npy_string_allocator* a,
+            const npy_packed_static_string* p,
+            npy_static_string* u) {
+        return (*(int (*)(npy_string_allocator*,
+                          const npy_packed_static_string*,
+                          npy_static_string*)) PyArray_API[313])(a, p, u);
+    }
+    """
+    size_t strnlen(const char* s, size_t maxlen) noexcept nogil
+    cnp.npy_string_allocator* _cydr_acquire_allocator(
+        const cnp.PyArray_StringDTypeObject* d) noexcept
+    void _cydr_release_allocator(cnp.npy_string_allocator* a) noexcept
+    int _cydr_npy_string_load(
+        cnp.npy_string_allocator* a,
+        const cnp.npy_packed_static_string* p,
+        cnp.npy_static_string* u) noexcept
+
 cimport cython
 cimport numpy as cnp
 import numpy as np
@@ -34,28 +67,26 @@ cnp.import_array()
 cdef int ENCAPSULATION_HEADER_SIZE = 4
 cdef int CDR_ALIGN_MAX = 8
 
-cdef inline list normalize_string_collection(
-    object values,
-    str field_name,
-):
-    cdef cnp.ndarray array_values
+cdef inline Py_ssize_t write_string_raw(
+    unsigned char* buffer,
+    Py_ssize_t pos,
+    const char* data,
+    Py_ssize_t size,
+) noexcept:
+    pos = align_position(pos, 4)
+    pos = write_uint32_raw(buffer, pos, <uint32_t>(size + 1))
+    if size > 0:
+        memcpy(buffer + pos, data, <size_t>size)
+    buffer[pos + size] = 0
+    return pos + size + 1
 
-    if isinstance(values, list):
-        return <list> values
 
-    if isinstance(values, np.ndarray):
-        array_values = values
-        if array_values.ndim != 1:
-            raise ValueError(f"{field_name} must be a 1D NumPy array or list[bytes].")
-        if array_values.dtype.kind != "S":
-            raise TypeError(
-                f"{field_name} must be a NumPy bytes_ array or list[bytes], got dtype {array_values.dtype!s}."
-            )
-        return values.tolist()
-
-    raise TypeError(
-        f"{field_name} must be a NumPy bytes_ array or list[bytes], got {type(values)!r}."
-    )
+cdef inline Py_ssize_t advance_string_raw(
+    Py_ssize_t pos,
+    Py_ssize_t size,
+) noexcept:
+    pos = align_position(pos, 4)
+    return pos + 4 + size + 1
 
 
 # This prototype assumes the host machine is little-endian.
@@ -64,13 +95,9 @@ cdef inline list normalize_string_collection(
 cdef inline Py_ssize_t align_position(
     Py_ssize_t pos,
     int alignment,
-    Py_ssize_t align_offset,
-    int align_max,
 ) noexcept:
-    cdef int effective_alignment = alignment
-    if effective_alignment > align_max:
-        effective_alignment = align_max
-    return ((pos - align_offset + effective_alignment - 1) & ~(effective_alignment - 1)) + align_offset
+    cdef int effective_alignment = alignment if alignment <= CDR_ALIGN_MAX else CDR_ALIGN_MAX
+    return (pos + effective_alignment - 1) & ~(effective_alignment - 1)
 
 
 cdef inline Py_ssize_t write_uint32_raw(
@@ -93,14 +120,6 @@ cdef inline const unsigned char* data_ptr(const unsigned char[::1] data) noexcep
     return &data[0]
 
 
-cdef inline void require_available(
-    Py_ssize_t buffer_length,
-    Py_ssize_t pos,
-    Py_ssize_t byte_count,
-) except *:
-    if pos < 0 or byte_count < 0 or pos + byte_count > buffer_length:
-        raise ValueError("Buffer too short while deserializing.")
-
 
 cdef inline void require_consumed(
     const unsigned char[::1] data,
@@ -110,13 +129,13 @@ cdef inline void require_consumed(
         raise ValueError("Trailing bytes after deserializing.")
 
 
-cdef inline Py_ssize_t validate_encapsulation_header(
+cdef inline void validate_encapsulation_header(
     const unsigned char[::1] data,
-) except -1:
-    require_available(data.shape[0], 0, ENCAPSULATION_HEADER_SIZE)
+) except *:
+    if ENCAPSULATION_HEADER_SIZE > data.shape[0]:
+        raise ValueError("Buffer too short while deserializing.")
     if data[0] != 0 or data[1] != 1 or data[2] != 0 or data[3] != 0:
         raise ValueError("Unsupported encapsulation header.")
-    return ENCAPSULATION_HEADER_SIZE
 
 
 cdef inline uint32_t read_uint32_raw_value(
@@ -124,25 +143,24 @@ cdef inline uint32_t read_uint32_raw_value(
     Py_ssize_t pos,
 ) except? 0:
     cdef uint32_t value = 0
-    require_available(data.shape[0], pos, cython.sizeof(uint32_t))
+    if pos + <Py_ssize_t>cython.sizeof(uint32_t) > data.shape[0]:
+        raise ValueError("Buffer too short while deserializing.")
     memcpy(&value, data_ptr(data) + pos, cython.sizeof(uint32_t))
     return value
 
 
-cdef inline object read_aligned_scalar_object(
+cdef inline void read_aligned_value(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
+    void* out,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
-    object dtype,
-):
-    cdef object value
-    pos[0] = align_position(pos[0], alignment, align_offset, CDR_ALIGN_MAX)
-    require_available(data.shape[0], pos[0], itemsize)
-    value = np.frombuffer(data, dtype=dtype, count=1, offset=pos[0])[0]
+) except *:
+    pos[0] = align_position(pos[0], alignment)
+    if pos[0] + itemsize > data.shape[0]:
+        raise ValueError("Buffer too short while deserializing.")
+    memcpy(out, data_ptr(data) + pos[0], <size_t>itemsize)
     pos[0] += itemsize
-    return value
 
 
 cdef inline object read_primitive_array_object(
@@ -151,14 +169,14 @@ cdef inline object read_primitive_array_object(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
     object dtype,
 ):
     cdef Py_ssize_t byte_count = count * itemsize
     cdef object value
     if count > 0:
-        pos[0] = align_position(pos[0], alignment, align_offset, CDR_ALIGN_MAX)
-        require_available(data.shape[0], pos[0], byte_count)
+        pos[0] = align_position(pos[0], alignment)
+        if pos[0] + byte_count > data.shape[0]:
+            raise ValueError("Buffer too short while deserializing.")
         # Keep numeric collections owned by the returned ndarray. A future
         # zero-copy experiment can switch this back to a Python memoryview
         # slice here, but the view semantics make payload lifetime more subtle.
@@ -173,11 +191,10 @@ cdef inline object read_primitive_sequence_object(
     Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
     object dtype,
 ):
     cdef uint32_t count
-    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    pos[0] = align_position(pos[0], 4)
     count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
     return read_primitive_array_object(
@@ -186,7 +203,6 @@ cdef inline object read_primitive_sequence_object(
         count,
         itemsize,
         alignment,
-        align_offset,
         dtype,
     )
 
@@ -194,13 +210,12 @@ cdef inline object read_primitive_sequence_object(
 cdef inline bytes read_string_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     cdef uint32_t byte_count
     cdef Py_ssize_t string_size
     cdef bytes value
 
-    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    pos[0] = align_position(pos[0], 4)
     byte_count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
 
@@ -208,7 +223,8 @@ cdef inline bytes read_string_object(
     if string_size <= 0:
         raise ValueError("Invalid CDR string length.")
 
-    require_available(data.shape[0], pos[0], string_size)
+    if pos[0] + string_size > data.shape[0]:
+        raise ValueError("Buffer too short while deserializing.")
     if data[pos[0] + string_size - 1] != 0:
         raise ValueError("CDR string is missing a trailing NUL byte.")
 
@@ -225,7 +241,6 @@ cdef inline list read_string_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
-    Py_ssize_t align_offset,
 ):
     cdef Py_ssize_t index
     cdef bytes value
@@ -235,7 +250,7 @@ cdef inline list read_string_array_object(
         # Keep string arrays and sequences on the same bytes-copy path as
         # scalar strings. A shared base memoryview was still slower than
         # copying for the short-string arrays that matter most in ROS 2.
-        value = read_string_object(data, pos, align_offset)
+        value = read_string_object(data, pos)
         values.append(value)
 
     return values
@@ -244,15 +259,14 @@ cdef inline list read_string_array_object(
 cdef inline list read_string_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     cdef uint32_t count
 
-    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    pos[0] = align_position(pos[0], 4)
     count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
 
-    return read_string_array_object(data, pos, count, align_offset)
+    return read_string_array_object(data, pos, count)
 
 
 cdef inline Py_ssize_t bytes_size(bytes value) noexcept:
@@ -276,9 +290,8 @@ cdef inline Py_ssize_t write_aligned_value(
     const void* data,
     Py_ssize_t byte_count,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
-    pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
+    pos = align_position(pos, alignment)
     return write_raw_bytes(buffer, pos, data, byte_count)
 
 
@@ -304,14 +317,10 @@ cdef inline Py_ssize_t write_string(
     unsigned char* buffer,
     Py_ssize_t pos,
     bytes value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    cdef Py_ssize_t size = bytes_size(value)
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-    pos = write_uint32_raw(buffer, pos, <uint32_t> (size + 1))
-    pos = write_bytes_value(buffer, pos, value)
-    buffer[pos] = 0
-    return pos + 1
+    return write_string_raw(
+        buffer, pos, PyBytes_AS_STRING(value), PyBytes_GET_SIZE(value)
+    )
 
 
 cdef inline Py_ssize_t advance_primitive_array_position(
@@ -319,10 +328,9 @@ cdef inline Py_ssize_t advance_primitive_array_position(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
     if count > 0:
-        pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
+        pos = align_position(pos, alignment)
         pos += count * itemsize
     return pos
 
@@ -332,11 +340,10 @@ cdef inline Py_ssize_t advance_primitive_sequence_position(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    pos = align_position(pos, 4)
     pos += 4
-    return advance_primitive_array_position(pos, count, itemsize, alignment, align_offset)
+    return advance_primitive_array_position(pos, count, itemsize, alignment)
 
 
 cdef inline Py_ssize_t write_primitive_array(
@@ -346,11 +353,10 @@ cdef inline Py_ssize_t write_primitive_array(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
     cdef Py_ssize_t byte_count
     if count > 0:
-        pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
+        pos = align_position(pos, alignment)
         byte_count = count * itemsize
         pos = write_raw_bytes(buffer, pos, data, byte_count)
     return pos
@@ -363,62 +369,133 @@ cdef inline Py_ssize_t write_primitive_sequence(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    pos = align_position(pos, 4)
     pos = write_uint32_raw(buffer, pos, <uint32_t> count)
-    return write_primitive_array(buffer, pos, data, count, itemsize, alignment, align_offset)
+    return write_primitive_array(buffer, pos, data, count, itemsize, alignment)
 
 
 cdef inline Py_ssize_t advance_string_array_position(
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept:
-    cdef Py_ssize_t index
-    cdef Py_ssize_t count = PyList_GET_SIZE(values)
-    cdef bytes item
-    for index in range(count):
-        item = <bytes> PyList_GET_ITEM(values, index)
-        pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-        pos += 4 + bytes_size(item) + 1
+    object values,
+) except -1:
+    cdef Py_ssize_t index, n, itemsize
+    cdef cnp.ndarray arr
+    cdef const char* ptr
+    cdef cnp.npy_static_string s
+    cdef cnp.npy_packed_static_string* slot
+    cdef cnp.npy_string_allocator* alloc
+
+    if type(values) is list:
+        n = PyList_GET_SIZE(values)
+        for index in range(n):
+            pos = advance_string_raw(
+                pos, PyBytes_GET_SIZE(<bytes>PyList_GET_ITEM(values, index))
+            )
+        return pos
+
+    arr = <cnp.ndarray>values
+    n = arr.shape[0]
+
+    if arr.dtype.kind == 'S':
+        itemsize = cnp.PyArray_ITEMSIZE(arr)
+        ptr = <const char*>cnp.PyArray_DATA(arr)
+        for index in range(n):
+            pos = advance_string_raw(
+                pos, strnlen(ptr + index * itemsize, <size_t>itemsize)
+            )
+        return pos
+
+    # StringDType ('T')
+    alloc = _cydr_acquire_allocator(
+        <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(arr)
+    )
+    ptr = <const char*>cnp.PyArray_DATA(arr)
+    itemsize = cnp.PyArray_ITEMSIZE(arr)
+    s.size = 0
+    s.buf = NULL
+    for index in range(n):
+        slot = <cnp.npy_packed_static_string*>(ptr + index * itemsize)
+        if _cydr_npy_string_load(alloc, slot, &s) == -1:
+            _cydr_release_allocator(alloc)
+            raise RuntimeError("Failed to load StringDType element")
+        pos = advance_string_raw(pos, <Py_ssize_t>s.size)
+    _cydr_release_allocator(alloc)
     return pos
 
 
 cdef inline Py_ssize_t advance_string_sequence_position(
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept:
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    object values,
+) except -1:
+    pos = align_position(pos, 4)
     pos += 4
-    return advance_string_array_position(pos, values, align_offset)
+    return advance_string_array_position(pos, values)
 
 
 cdef inline Py_ssize_t write_string_array(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept:
-    cdef Py_ssize_t index
-    cdef Py_ssize_t count = PyList_GET_SIZE(values)
-    cdef bytes item
-    for index in range(count):
-        item = <bytes> PyList_GET_ITEM(values, index)
-        pos = write_string(buffer, pos, item, align_offset)
+    object values,
+) except -1:
+    cdef Py_ssize_t index, n, itemsize
+    cdef cnp.ndarray arr
+    cdef const char* ptr
+    cdef cnp.npy_static_string s
+    cdef cnp.npy_packed_static_string* slot
+    cdef cnp.npy_string_allocator* alloc
+
+    if type(values) is list:
+        n = PyList_GET_SIZE(values)
+        for index in range(n):
+            pos = write_string_raw(
+                buffer, pos,
+                PyBytes_AS_STRING(<bytes>PyList_GET_ITEM(values, index)),
+                PyBytes_GET_SIZE(<bytes>PyList_GET_ITEM(values, index)),
+            )
+        return pos
+
+    arr = <cnp.ndarray>values
+    n = arr.shape[0]
+
+    if arr.dtype.kind == 'S':
+        itemsize = cnp.PyArray_ITEMSIZE(arr)
+        ptr = <const char*>cnp.PyArray_DATA(arr)
+        for index in range(n):
+            pos = write_string_raw(
+                buffer, pos,
+                ptr + index * itemsize,
+                strnlen(ptr + index * itemsize, <size_t>itemsize),
+            )
+        return pos
+
+    # StringDType ('T')
+    alloc = _cydr_acquire_allocator(
+        <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(arr)
+    )
+    ptr = <const char*>cnp.PyArray_DATA(arr)
+    itemsize = cnp.PyArray_ITEMSIZE(arr)
+    s.size = 0
+    s.buf = NULL
+    for index in range(n):
+        slot = <cnp.npy_packed_static_string*>(ptr + index * itemsize)
+        if _cydr_npy_string_load(alloc, slot, &s) == -1:
+            _cydr_release_allocator(alloc)
+            raise RuntimeError("Failed to load StringDType element")
+        pos = write_string_raw(buffer, pos, s.buf, <Py_ssize_t>s.size)
+    _cydr_release_allocator(alloc)
     return pos
 
 
 cdef inline Py_ssize_t write_string_sequence(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept:
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-    pos = write_uint32_raw(buffer, pos, <uint32_t> PyList_GET_SIZE(values))
-    return write_string_array(buffer, pos, values, align_offset)
+    object values,
+) except -1:
+    cdef Py_ssize_t count = len(values)
+    pos = align_position(pos, 4)
+    pos = write_uint32_raw(buffer, pos, <uint32_t>count)
+    return write_string_array(buffer, pos, values)
 
 
 cdef inline Py_ssize_t write_boolean_field(
@@ -433,292 +510,213 @@ cdef inline Py_ssize_t write_byte_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint8_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint8_t), 1, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t write_int8_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int8_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(int8_t), 1, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(int8_t), 1)
 
 
 cdef inline Py_ssize_t write_uint8_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint8_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint8_t), 1, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t write_int16_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int16_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(int16_t), 2, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(int16_t), 2)
 
 
 cdef inline Py_ssize_t write_uint16_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint16_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint16_t), 2, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint16_t), 2)
 
 
 cdef inline Py_ssize_t write_int32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int32_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(int32_t), 4, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(int32_t), 4)
 
 
 cdef inline Py_ssize_t write_uint32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint32_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint32_t), 4, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint32_t), 4)
 
 
 cdef inline Py_ssize_t write_int64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int64_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(int64_t), 8, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(int64_t), 8)
 
 
 cdef inline Py_ssize_t write_uint64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint64_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint64_t), 8, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(uint64_t), 8)
 
 
 cdef inline Py_ssize_t write_float32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     cnp.float32_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(cnp.float32_t), 4, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(cnp.float32_t), 4)
 
 
 cdef inline Py_ssize_t write_float64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     cnp.float64_t value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_aligned_value(buffer, pos, &value, cython.sizeof(cnp.float64_t), 8, align_offset)
+    return write_aligned_value(buffer, pos, &value, cython.sizeof(cnp.float64_t), 8)
 
 
 cdef inline Py_ssize_t write_string_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     bytes value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return write_string(buffer, pos, value, align_offset)
+    return write_string(buffer, pos, value)
 
 
-cdef inline object read_boolean_field(
+cdef inline bint read_boolean_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-):
-    cdef object value
-    require_available(data.shape[0], pos[0], 1)
-    value = bool(data[pos[0]] != 0)
+) except? -1:
+    if pos[0] + 1 > data.shape[0]:
+        raise ValueError("Buffer too short while deserializing.")
+    cdef bint value = data[pos[0]] != 0
     pos[0] += 1
     return value
 
 
-cdef inline object read_byte_field(
+cdef inline uint8_t read_byte_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(uint8_t),
-        1,
-        align_offset,
-        np.uint8,
-    )
+) except? 0:
+    cdef uint8_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(uint8_t), 1)
+    return value
 
 
-cdef inline object read_int8_field(
+cdef inline int8_t read_int8_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(int8_t),
-        1,
-        align_offset,
-        np.int8,
-    )
+) except? -1:
+    cdef int8_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(int8_t), 1)
+    return value
 
 
-cdef inline object read_uint8_field(
+cdef inline uint8_t read_uint8_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(uint8_t),
-        1,
-        align_offset,
-        np.uint8,
-    )
+) except? 0:
+    cdef uint8_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(uint8_t), 1)
+    return value
 
 
-cdef inline object read_int16_field(
+cdef inline int16_t read_int16_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(int16_t),
-        2,
-        align_offset,
-        np.int16,
-    )
+) except? -1:
+    cdef int16_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(int16_t), 2)
+    return value
 
 
-cdef inline object read_uint16_field(
+cdef inline uint16_t read_uint16_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(uint16_t),
-        2,
-        align_offset,
-        np.uint16,
-    )
+) except? 0:
+    cdef uint16_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(uint16_t), 2)
+    return value
 
 
-cdef inline object read_int32_field(
+cdef inline int32_t read_int32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(int32_t),
-        4,
-        align_offset,
-        np.int32,
-    )
+) except? -1:
+    cdef int32_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(int32_t), 4)
+    return value
 
 
-cdef inline object read_uint32_field(
+cdef inline uint32_t read_uint32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(uint32_t),
-        4,
-        align_offset,
-        np.uint32,
-    )
+) except? 0:
+    cdef uint32_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(uint32_t), 4)
+    return value
 
 
-cdef inline object read_int64_field(
+cdef inline int64_t read_int64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(int64_t),
-        8,
-        align_offset,
-        np.int64,
-    )
+) except? -1:
+    cdef int64_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(int64_t), 8)
+    return value
 
 
-cdef inline object read_uint64_field(
+cdef inline uint64_t read_uint64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(uint64_t),
-        8,
-        align_offset,
-        np.uint64,
-    )
+) except? 0:
+    cdef uint64_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(uint64_t), 8)
+    return value
 
 
-cdef inline object read_float32_field(
+cdef inline cnp.float32_t read_float32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(cnp.float32_t),
-        4,
-        align_offset,
-        np.float32,
-    )
+) except? -1.0:
+    cdef cnp.float32_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(cnp.float32_t), 4)
+    return value
 
 
-cdef inline object read_float64_field(
+cdef inline cnp.float64_t read_float64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-):
-    return read_aligned_scalar_object(
-        data,
-        pos,
-        cython.sizeof(cnp.float64_t),
-        8,
-        align_offset,
-        np.float64,
-    )
+) except? -1.0:
+    cdef cnp.float64_t value = 0
+    read_aligned_value(data, pos, &value, cython.sizeof(cnp.float64_t), 8)
+    return value
 
 
 cdef inline bytes read_string_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
-    return read_string_object(data, pos, align_offset)
+    return read_string_object(data, pos)
 
 
 cdef inline const void* bool_sequence_ptr(const cnp.npy_bool[::1] values) noexcept:
@@ -787,7 +785,6 @@ cdef inline Py_ssize_t write_bool_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.npy_bool[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -796,7 +793,6 @@ cdef inline Py_ssize_t write_bool_sequence_field(
         values.shape[0],
         cython.sizeof(cnp.npy_bool),
         1,
-        align_offset,
     )
 
 
@@ -804,7 +800,6 @@ cdef inline Py_ssize_t write_byte_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -813,7 +808,6 @@ cdef inline Py_ssize_t write_byte_array_field(
         values.shape[0],
         cython.sizeof(uint8_t),
         1,
-        align_offset,
     )
 
 
@@ -821,7 +815,6 @@ cdef inline Py_ssize_t write_int8_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -830,7 +823,6 @@ cdef inline Py_ssize_t write_int8_sequence_field(
         values.shape[0],
         cython.sizeof(int8_t),
         1,
-        align_offset,
     )
 
 
@@ -838,7 +830,6 @@ cdef inline Py_ssize_t write_uint8_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -847,7 +838,6 @@ cdef inline Py_ssize_t write_uint8_array_field(
         values.shape[0],
         cython.sizeof(uint8_t),
         1,
-        align_offset,
     )
 
 
@@ -855,7 +845,6 @@ cdef inline Py_ssize_t write_int16_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -864,7 +853,6 @@ cdef inline Py_ssize_t write_int16_sequence_field(
         values.shape[0],
         cython.sizeof(int16_t),
         2,
-        align_offset,
     )
 
 
@@ -872,7 +860,6 @@ cdef inline Py_ssize_t write_uint16_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -881,7 +868,6 @@ cdef inline Py_ssize_t write_uint16_array_field(
         values.shape[0],
         cython.sizeof(uint16_t),
         2,
-        align_offset,
     )
 
 
@@ -889,7 +875,6 @@ cdef inline Py_ssize_t write_int32_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -898,7 +883,6 @@ cdef inline Py_ssize_t write_int32_sequence_field(
         values.shape[0],
         cython.sizeof(int32_t),
         4,
-        align_offset,
     )
 
 
@@ -906,7 +890,6 @@ cdef inline Py_ssize_t write_uint32_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -915,7 +898,6 @@ cdef inline Py_ssize_t write_uint32_array_field(
         values.shape[0],
         cython.sizeof(uint32_t),
         4,
-        align_offset,
     )
 
 
@@ -923,7 +905,6 @@ cdef inline Py_ssize_t write_int64_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -932,7 +913,6 @@ cdef inline Py_ssize_t write_int64_sequence_field(
         values.shape[0],
         cython.sizeof(int64_t),
         8,
-        align_offset,
     )
 
 
@@ -940,7 +920,6 @@ cdef inline Py_ssize_t write_uint64_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -949,7 +928,6 @@ cdef inline Py_ssize_t write_uint64_array_field(
         values.shape[0],
         cython.sizeof(uint64_t),
         8,
-        align_offset,
     )
 
 
@@ -957,7 +935,6 @@ cdef inline Py_ssize_t write_float32_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -966,7 +943,6 @@ cdef inline Py_ssize_t write_float32_sequence_field(
         values.shape[0],
         cython.sizeof(cnp.float32_t),
         4,
-        align_offset,
     )
 
 
@@ -974,7 +950,6 @@ cdef inline Py_ssize_t write_float64_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_array(
         buffer,
@@ -983,7 +958,6 @@ cdef inline Py_ssize_t write_float64_array_field(
         values.shape[0],
         cython.sizeof(cnp.float64_t),
         8,
-        align_offset,
     )
 
 
@@ -991,7 +965,6 @@ cdef inline Py_ssize_t write_float64_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return write_primitive_sequence(
         buffer,
@@ -1000,7 +973,6 @@ cdef inline Py_ssize_t write_float64_sequence_field(
         values.shape[0],
         cython.sizeof(cnp.float64_t),
         8,
-        align_offset,
     )
 
 
@@ -1008,34 +980,28 @@ cdef inline Py_ssize_t write_text_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1:
-    cdef list string_values = normalize_string_collection(values, "text_array")
-    require_fixed_length(PyList_GET_SIZE(string_values), 2, "text_array")
-    return write_string_array(buffer, pos, string_values, align_offset)
+    require_fixed_length(len(values), 2, "text_array")
+    return write_string_array(buffer, pos, values)
 
 
 cdef inline Py_ssize_t write_text_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1:
-    cdef list string_values = normalize_string_collection(values, "text_sequence")
-    return write_string_sequence(buffer, pos, string_values, align_offset)
+    return write_string_sequence(buffer, pos, values)
 
 
 cdef inline object read_bool_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(cnp.npy_bool),
         1,
-        align_offset,
         np.bool_,
     )
 
@@ -1043,7 +1009,6 @@ cdef inline object read_bool_sequence_field(
 cdef inline object read_byte_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1051,7 +1016,6 @@ cdef inline object read_byte_array_field(
         3,
         cython.sizeof(uint8_t),
         1,
-        align_offset,
         np.uint8,
     )
 
@@ -1059,14 +1023,12 @@ cdef inline object read_byte_array_field(
 cdef inline object read_int8_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(int8_t),
         1,
-        align_offset,
         np.int8,
     )
 
@@ -1074,7 +1036,6 @@ cdef inline object read_int8_sequence_field(
 cdef inline object read_uint8_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1082,7 +1043,6 @@ cdef inline object read_uint8_array_field(
         3,
         cython.sizeof(uint8_t),
         1,
-        align_offset,
         np.uint8,
     )
 
@@ -1090,14 +1050,12 @@ cdef inline object read_uint8_array_field(
 cdef inline object read_int16_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(int16_t),
         2,
-        align_offset,
         np.int16,
     )
 
@@ -1105,7 +1063,6 @@ cdef inline object read_int16_sequence_field(
 cdef inline object read_uint16_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1113,7 +1070,6 @@ cdef inline object read_uint16_array_field(
         2,
         cython.sizeof(uint16_t),
         2,
-        align_offset,
         np.uint16,
     )
 
@@ -1121,14 +1077,12 @@ cdef inline object read_uint16_array_field(
 cdef inline object read_int32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(int32_t),
         4,
-        align_offset,
         np.int32,
     )
 
@@ -1136,7 +1090,6 @@ cdef inline object read_int32_sequence_field(
 cdef inline object read_uint32_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1144,7 +1097,6 @@ cdef inline object read_uint32_array_field(
         2,
         cython.sizeof(uint32_t),
         4,
-        align_offset,
         np.uint32,
     )
 
@@ -1152,14 +1104,12 @@ cdef inline object read_uint32_array_field(
 cdef inline object read_int64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(int64_t),
         8,
-        align_offset,
         np.int64,
     )
 
@@ -1167,7 +1117,6 @@ cdef inline object read_int64_sequence_field(
 cdef inline object read_uint64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1175,7 +1124,6 @@ cdef inline object read_uint64_array_field(
         2,
         cython.sizeof(uint64_t),
         8,
-        align_offset,
         np.uint64,
     )
 
@@ -1183,14 +1131,12 @@ cdef inline object read_uint64_array_field(
 cdef inline object read_float32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(cnp.float32_t),
         4,
-        align_offset,
         np.float32,
     )
 
@@ -1198,7 +1144,6 @@ cdef inline object read_float32_sequence_field(
 cdef inline object read_float64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
         data,
@@ -1206,7 +1151,6 @@ cdef inline object read_float64_array_field(
         2,
         cython.sizeof(cnp.float64_t),
         8,
-        align_offset,
         np.float64,
     )
 
@@ -1214,14 +1158,12 @@ cdef inline object read_float64_array_field(
 cdef inline object read_float64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
         data,
         pos,
         cython.sizeof(cnp.float64_t),
         8,
-        align_offset,
         np.float64,
     )
 
@@ -1229,17 +1171,15 @@ cdef inline object read_float64_sequence_field(
 cdef inline object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
-    return np.asarray(read_string_array_object(data, pos, 2, align_offset), dtype=np.bytes_)
+    return np.asarray(read_string_array_object(data, pos, 2), dtype=np.bytes_)
 
 
 cdef inline object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 ):
-    return np.asarray(read_string_sequence_object(data, pos, align_offset), dtype=np.bytes_)
+    return np.asarray(read_string_sequence_object(data, pos), dtype=np.bytes_)
 
 
 cdef inline void require_fixed_length(
@@ -1255,17 +1195,15 @@ cdef inline Py_ssize_t advance_scalar_field(
     Py_ssize_t pos,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_primitive_array_position(pos, 1, itemsize, alignment, align_offset)
+    return advance_primitive_array_position(pos, 1, itemsize, alignment)
 
 
 cdef inline Py_ssize_t advance_string_field(
     Py_ssize_t pos,
     bytes value,
-    Py_ssize_t align_offset,
 ) noexcept:
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
+    pos = align_position(pos, 4)
     return pos + 4 + bytes_size(value) + 1
 
 
@@ -1275,216 +1213,188 @@ cdef inline Py_ssize_t advance_boolean_field(Py_ssize_t pos) noexcept:
 
 cdef inline Py_ssize_t advance_byte_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(uint8_t), 1, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t advance_int8_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(int8_t), 1, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(int8_t), 1)
 
 
 cdef inline Py_ssize_t advance_uint8_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(uint8_t), 1, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t advance_int16_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(int16_t), 2, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(int16_t), 2)
 
 
 cdef inline Py_ssize_t advance_uint16_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(uint16_t), 2, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(uint16_t), 2)
 
 
 cdef inline Py_ssize_t advance_int32_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(int32_t), 4, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(int32_t), 4)
 
 
 cdef inline Py_ssize_t advance_uint32_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(uint32_t), 4, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(uint32_t), 4)
 
 
 cdef inline Py_ssize_t advance_int64_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(int64_t), 8, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(int64_t), 8)
 
 
 cdef inline Py_ssize_t advance_uint64_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(uint64_t), 8, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(uint64_t), 8)
 
 
 cdef inline Py_ssize_t advance_float32_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(cnp.float32_t), 4, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(cnp.float32_t), 4)
 
 
 cdef inline Py_ssize_t advance_float64_field(
     Py_ssize_t pos,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_scalar_field(pos, cython.sizeof(cnp.float64_t), 8, align_offset)
+    return advance_scalar_field(pos, cython.sizeof(cnp.float64_t), 8)
 
 
 cdef inline Py_ssize_t advance_bool_sequence_field(
     Py_ssize_t pos,
     const cnp.npy_bool[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return advance_primitive_sequence_position(
-        pos, values.shape[0], cython.sizeof(cnp.npy_bool), 1, align_offset
+        pos, values.shape[0], cython.sizeof(cnp.npy_bool), 1
     )
 
 
 cdef inline Py_ssize_t advance_byte_array_field(
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 3, "byte_array")
-    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint8_t), 1, align_offset)
+    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t advance_int8_sequence_field(
     Py_ssize_t pos,
     const int8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int8_t), 1, align_offset)
+    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int8_t), 1)
 
 
 cdef inline Py_ssize_t advance_uint8_array_field(
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 3, "uint8_array")
-    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint8_t), 1, align_offset)
+    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint8_t), 1)
 
 
 cdef inline Py_ssize_t advance_int16_sequence_field(
     Py_ssize_t pos,
     const int16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int16_t), 2, align_offset)
+    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int16_t), 2)
 
 
 cdef inline Py_ssize_t advance_uint16_array_field(
     Py_ssize_t pos,
     const uint16_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 2, "uint16_array")
-    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint16_t), 2, align_offset)
+    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint16_t), 2)
 
 
 cdef inline Py_ssize_t advance_int32_sequence_field(
     Py_ssize_t pos,
     const int32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int32_t), 4, align_offset)
+    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int32_t), 4)
 
 
 cdef inline Py_ssize_t advance_uint32_array_field(
     Py_ssize_t pos,
     const uint32_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 2, "uint32_array")
-    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint32_t), 4, align_offset)
+    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint32_t), 4)
 
 
 cdef inline Py_ssize_t advance_int64_sequence_field(
     Py_ssize_t pos,
     const int64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
-    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int64_t), 8, align_offset)
+    return advance_primitive_sequence_position(pos, values.shape[0], cython.sizeof(int64_t), 8)
 
 
 cdef inline Py_ssize_t advance_uint64_array_field(
     Py_ssize_t pos,
     const uint64_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 2, "uint64_array")
-    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint64_t), 8, align_offset)
+    return advance_primitive_array_position(pos, values.shape[0], cython.sizeof(uint64_t), 8)
 
 
 cdef inline Py_ssize_t advance_float32_sequence_field(
     Py_ssize_t pos,
     const cnp.float32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return advance_primitive_sequence_position(
-        pos, values.shape[0], cython.sizeof(cnp.float32_t), 4, align_offset
+        pos, values.shape[0], cython.sizeof(cnp.float32_t), 4
     )
 
 
 cdef inline Py_ssize_t advance_float64_array_field(
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1:
     require_fixed_length(values.shape[0], 2, "float64_array")
     return advance_primitive_array_position(
-        pos, values.shape[0], cython.sizeof(cnp.float64_t), 8, align_offset
+        pos, values.shape[0], cython.sizeof(cnp.float64_t), 8
     )
 
 
 cdef inline Py_ssize_t advance_float64_sequence_field(
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept:
     return advance_primitive_sequence_position(
-        pos, values.shape[0], cython.sizeof(cnp.float64_t), 8, align_offset
+        pos, values.shape[0], cython.sizeof(cnp.float64_t), 8
     )
 
 
 cdef inline Py_ssize_t advance_text_array_field(
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1:
-    cdef list string_values = normalize_string_collection(values, "text_array")
-    require_fixed_length(PyList_GET_SIZE(string_values), 2, "text_array")
-    return advance_string_array_position(pos, string_values, align_offset)
+    require_fixed_length(len(values), 2, "text_array")
+    return advance_string_array_position(pos, values)
 
 
 cdef inline Py_ssize_t advance_text_sequence_field(
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1:
-    cdef list string_values = normalize_string_collection(values, "text_sequence")
-    return advance_string_sequence_position(pos, string_values, align_offset)
+    return advance_string_sequence_position(pos, values)
 
 
 cpdef Py_ssize_t compute_serialized_size_every_supported_schema(
@@ -1519,41 +1429,40 @@ cpdef Py_ssize_t compute_serialized_size_every_supported_schema(
     object text_array,
     object text_sequence,
 ) except -1:
-    cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+    cdef Py_ssize_t pos = 0
 
     pos = advance_boolean_field(pos)
-    pos = advance_byte_field(pos, align_offset)
-    pos = advance_int8_field(pos, align_offset)
-    pos = advance_uint8_field(pos, align_offset)
-    pos = advance_int16_field(pos, align_offset)
-    pos = advance_uint16_field(pos, align_offset)
-    pos = advance_int32_field(pos, align_offset)
-    pos = advance_uint32_field(pos, align_offset)
-    pos = advance_int64_field(pos, align_offset)
-    pos = advance_uint64_field(pos, align_offset)
-    pos = advance_float32_field(pos, align_offset)
-    pos = advance_float64_field(pos, align_offset)
-    pos = advance_string_field(pos, text, align_offset)
-    pos = advance_int32_field(pos, align_offset)
-    pos = advance_uint32_field(pos, align_offset)
-    pos = advance_string_field(pos, header_frame_id, align_offset)
+    pos = advance_byte_field(pos)
+    pos = advance_int8_field(pos)
+    pos = advance_uint8_field(pos)
+    pos = advance_int16_field(pos)
+    pos = advance_uint16_field(pos)
+    pos = advance_int32_field(pos)
+    pos = advance_uint32_field(pos)
+    pos = advance_int64_field(pos)
+    pos = advance_uint64_field(pos)
+    pos = advance_float32_field(pos)
+    pos = advance_float64_field(pos)
+    pos = advance_string_field(pos, text)
+    pos = advance_int32_field(pos)
+    pos = advance_uint32_field(pos)
+    pos = advance_string_field(pos, header_frame_id)
 
-    pos = advance_bool_sequence_field(pos, bool_sequence, align_offset)
-    pos = advance_byte_array_field(pos, byte_array, align_offset)
-    pos = advance_int8_sequence_field(pos, int8_sequence, align_offset)
-    pos = advance_uint8_array_field(pos, uint8_array, align_offset)
-    pos = advance_int16_sequence_field(pos, int16_sequence, align_offset)
-    pos = advance_uint16_array_field(pos, uint16_array, align_offset)
-    pos = advance_int32_sequence_field(pos, int32_sequence, align_offset)
-    pos = advance_uint32_array_field(pos, uint32_array, align_offset)
-    pos = advance_int64_sequence_field(pos, int64_sequence, align_offset)
-    pos = advance_uint64_array_field(pos, uint64_array, align_offset)
-    pos = advance_float32_sequence_field(pos, float32_sequence, align_offset)
-    pos = advance_float64_array_field(pos, float64_array, align_offset)
-    pos = advance_text_array_field(pos, text_array, align_offset)
-    pos = advance_text_sequence_field(pos, text_sequence, align_offset)
-    return pos
+    pos = advance_bool_sequence_field(pos, bool_sequence)
+    pos = advance_byte_array_field(pos, byte_array)
+    pos = advance_int8_sequence_field(pos, int8_sequence)
+    pos = advance_uint8_array_field(pos, uint8_array)
+    pos = advance_int16_sequence_field(pos, int16_sequence)
+    pos = advance_uint16_array_field(pos, uint16_array)
+    pos = advance_int32_sequence_field(pos, int32_sequence)
+    pos = advance_uint32_array_field(pos, uint32_array)
+    pos = advance_int64_sequence_field(pos, int64_sequence)
+    pos = advance_uint64_array_field(pos, uint64_array)
+    pos = advance_float32_sequence_field(pos, float32_sequence)
+    pos = advance_float64_array_field(pos, float64_array)
+    pos = advance_text_array_field(pos, text_array)
+    pos = advance_text_sequence_field(pos, text_sequence)
+    return pos + ENCAPSULATION_HEADER_SIZE
 
 
 cpdef bytearray serialize_every_supported_schema(
@@ -1622,64 +1531,64 @@ cpdef bytearray serialize_every_supported_schema(
     )
     cdef bytearray output = bytearray(total_size)
     cdef unsigned char* buffer = <unsigned char*> PyByteArray_AS_STRING(output)
-    cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+    cdef unsigned char* payload = buffer + ENCAPSULATION_HEADER_SIZE
+    cdef Py_ssize_t pos = 0
 
     write_encapsulation_header(buffer)
 
-    pos = write_boolean_field(buffer, pos, boolean_value)
-    pos = write_byte_field(buffer, pos, byte_value, align_offset)
-    pos = write_int8_field(buffer, pos, signed_int8, align_offset)
-    pos = write_uint8_field(buffer, pos, unsigned_int8, align_offset)
-    pos = write_int16_field(buffer, pos, signed_int16, align_offset)
-    pos = write_uint16_field(buffer, pos, unsigned_int16, align_offset)
-    pos = write_int32_field(buffer, pos, signed_int32, align_offset)
-    pos = write_uint32_field(buffer, pos, unsigned_int32, align_offset)
-    pos = write_int64_field(buffer, pos, signed_int64, align_offset)
-    pos = write_uint64_field(buffer, pos, unsigned_int64, align_offset)
-    pos = write_float32_field(buffer, pos, float32_value, align_offset)
-    pos = write_float64_field(buffer, pos, float64_value, align_offset)
-    pos = write_string_field(buffer, pos, text, align_offset)
-    pos = write_int32_field(buffer, pos, header_stamp_sec, align_offset)
-    pos = write_uint32_field(buffer, pos, header_stamp_nanosec, align_offset)
-    pos = write_string_field(buffer, pos, header_frame_id, align_offset)
+    pos = write_boolean_field(payload, pos, boolean_value)
+    pos = write_byte_field(payload, pos, byte_value)
+    pos = write_int8_field(payload, pos, signed_int8)
+    pos = write_uint8_field(payload, pos, unsigned_int8)
+    pos = write_int16_field(payload, pos, signed_int16)
+    pos = write_uint16_field(payload, pos, unsigned_int16)
+    pos = write_int32_field(payload, pos, signed_int32)
+    pos = write_uint32_field(payload, pos, unsigned_int32)
+    pos = write_int64_field(payload, pos, signed_int64)
+    pos = write_uint64_field(payload, pos, unsigned_int64)
+    pos = write_float32_field(payload, pos, float32_value)
+    pos = write_float64_field(payload, pos, float64_value)
+    pos = write_string_field(payload, pos, text)
+    pos = write_int32_field(payload, pos, header_stamp_sec)
+    pos = write_uint32_field(payload, pos, header_stamp_nanosec)
+    pos = write_string_field(payload, pos, header_frame_id)
 
-    pos = write_bool_sequence_field(buffer, pos, bool_sequence, align_offset)
-    pos = write_byte_array_field(buffer, pos, byte_array, align_offset)
-    pos = write_int8_sequence_field(buffer, pos, int8_sequence, align_offset)
-    pos = write_uint8_array_field(buffer, pos, uint8_array, align_offset)
-    pos = write_int16_sequence_field(buffer, pos, int16_sequence, align_offset)
-    pos = write_uint16_array_field(buffer, pos, uint16_array, align_offset)
-    pos = write_int32_sequence_field(buffer, pos, int32_sequence, align_offset)
-    pos = write_uint32_array_field(buffer, pos, uint32_array, align_offset)
-    pos = write_int64_sequence_field(buffer, pos, int64_sequence, align_offset)
-    pos = write_uint64_array_field(buffer, pos, uint64_array, align_offset)
-    pos = write_float32_sequence_field(buffer, pos, float32_sequence, align_offset)
-    pos = write_float64_array_field(buffer, pos, float64_array, align_offset)
-    pos = write_text_array_field(buffer, pos, text_array, align_offset)
-    pos = write_text_sequence_field(buffer, pos, text_sequence, align_offset)
+    pos = write_bool_sequence_field(payload, pos, bool_sequence)
+    pos = write_byte_array_field(payload, pos, byte_array)
+    pos = write_int8_sequence_field(payload, pos, int8_sequence)
+    pos = write_uint8_array_field(payload, pos, uint8_array)
+    pos = write_int16_sequence_field(payload, pos, int16_sequence)
+    pos = write_uint16_array_field(payload, pos, uint16_array)
+    pos = write_int32_sequence_field(payload, pos, int32_sequence)
+    pos = write_uint32_array_field(payload, pos, uint32_array)
+    pos = write_int64_sequence_field(payload, pos, int64_sequence)
+    pos = write_uint64_array_field(payload, pos, uint64_array)
+    pos = write_float32_sequence_field(payload, pos, float32_sequence)
+    pos = write_float64_array_field(payload, pos, float64_array)
+    pos = write_text_array_field(payload, pos, text_array)
+    pos = write_text_sequence_field(payload, pos, text_sequence)
     return output
 
 
 cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
-    cdef Py_ssize_t pos = validate_encapsulation_header(data)
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
-    cdef object boolean_value
-    cdef object byte_value
-    cdef object signed_int8
-    cdef object unsigned_int8
-    cdef object signed_int16
-    cdef object unsigned_int16
-    cdef object signed_int32
-    cdef object unsigned_int32
-    cdef object signed_int64
-    cdef object unsigned_int64
-    cdef object float32_value
-    cdef object float64_value
-    cdef object text
-    cdef object header_stamp_sec
-    cdef object header_stamp_nanosec
-    cdef object header_frame_id
+    cdef const unsigned char[::1] payload
+    cdef Py_ssize_t pos = 0
+    cdef bint boolean_value
+    cdef uint8_t byte_value
+    cdef int8_t signed_int8
+    cdef uint8_t unsigned_int8
+    cdef int16_t signed_int16
+    cdef uint16_t unsigned_int16
+    cdef int32_t signed_int32
+    cdef uint32_t unsigned_int32
+    cdef int64_t signed_int64
+    cdef uint64_t unsigned_int64
+    cdef cnp.float32_t float32_value
+    cdef cnp.float64_t float64_value
+    cdef bytes text
+    cdef int32_t header_stamp_sec
+    cdef uint32_t header_stamp_nanosec
+    cdef bytes header_frame_id
     cdef object bool_sequence
     cdef object byte_array
     cdef object int8_sequence
@@ -1695,37 +1604,40 @@ cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
     cdef object text_array
     cdef object text_sequence
 
-    boolean_value = read_boolean_field(data, &pos)
-    byte_value = read_byte_field(data, &pos, align_offset)
-    signed_int8 = read_int8_field(data, &pos, align_offset)
-    unsigned_int8 = read_uint8_field(data, &pos, align_offset)
-    signed_int16 = read_int16_field(data, &pos, align_offset)
-    unsigned_int16 = read_uint16_field(data, &pos, align_offset)
-    signed_int32 = read_int32_field(data, &pos, align_offset)
-    unsigned_int32 = read_uint32_field(data, &pos, align_offset)
-    signed_int64 = read_int64_field(data, &pos, align_offset)
-    unsigned_int64 = read_uint64_field(data, &pos, align_offset)
-    float32_value = read_float32_field(data, &pos, align_offset)
-    float64_value = read_float64_field(data, &pos, align_offset)
-    text = read_string_field(data, &pos, align_offset)
-    header_stamp_sec = read_int32_field(data, &pos, align_offset)
-    header_stamp_nanosec = read_uint32_field(data, &pos, align_offset)
-    header_frame_id = read_string_field(data, &pos, align_offset)
-    bool_sequence = read_bool_sequence_field(data, &pos, align_offset)
-    byte_array = read_byte_array_field(data, &pos, align_offset)
-    int8_sequence = read_int8_sequence_field(data, &pos, align_offset)
-    uint8_array = read_uint8_array_field(data, &pos, align_offset)
-    int16_sequence = read_int16_sequence_field(data, &pos, align_offset)
-    uint16_array = read_uint16_array_field(data, &pos, align_offset)
-    int32_sequence = read_int32_sequence_field(data, &pos, align_offset)
-    uint32_array = read_uint32_array_field(data, &pos, align_offset)
-    int64_sequence = read_int64_sequence_field(data, &pos, align_offset)
-    uint64_array = read_uint64_array_field(data, &pos, align_offset)
-    float32_sequence = read_float32_sequence_field(data, &pos, align_offset)
-    float64_array = read_float64_array_field(data, &pos, align_offset)
-    text_array = read_text_array_field(data, &pos, align_offset)
-    text_sequence = read_text_sequence_field(data, &pos, align_offset)
-    require_consumed(data, pos)
+    validate_encapsulation_header(data)
+    payload = data[ENCAPSULATION_HEADER_SIZE:]
+
+    boolean_value = read_boolean_field(payload, &pos)
+    byte_value = read_byte_field(payload, &pos)
+    signed_int8 = read_int8_field(payload, &pos)
+    unsigned_int8 = read_uint8_field(payload, &pos)
+    signed_int16 = read_int16_field(payload, &pos)
+    unsigned_int16 = read_uint16_field(payload, &pos)
+    signed_int32 = read_int32_field(payload, &pos)
+    unsigned_int32 = read_uint32_field(payload, &pos)
+    signed_int64 = read_int64_field(payload, &pos)
+    unsigned_int64 = read_uint64_field(payload, &pos)
+    float32_value = read_float32_field(payload, &pos)
+    float64_value = read_float64_field(payload, &pos)
+    text = read_string_field(payload, &pos)
+    header_stamp_sec = read_int32_field(payload, &pos)
+    header_stamp_nanosec = read_uint32_field(payload, &pos)
+    header_frame_id = read_string_field(payload, &pos)
+    bool_sequence = read_bool_sequence_field(payload, &pos)
+    byte_array = read_byte_array_field(payload, &pos)
+    int8_sequence = read_int8_sequence_field(payload, &pos)
+    uint8_array = read_uint8_array_field(payload, &pos)
+    int16_sequence = read_int16_sequence_field(payload, &pos)
+    uint16_array = read_uint16_array_field(payload, &pos)
+    int32_sequence = read_int32_sequence_field(payload, &pos)
+    uint32_array = read_uint32_array_field(payload, &pos)
+    int64_sequence = read_int64_sequence_field(payload, &pos)
+    uint64_array = read_uint64_array_field(payload, &pos)
+    float32_sequence = read_float32_sequence_field(payload, &pos)
+    float64_array = read_float64_array_field(payload, &pos)
+    text_array = read_text_array_field(payload, &pos)
+    text_sequence = read_text_sequence_field(payload, &pos)
+    require_consumed(payload, pos)
 
     return {
         "boolean_value": boolean_value,

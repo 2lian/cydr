@@ -52,8 +52,8 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
         scalar_decl="bint {name}",
         view_decl="const cnp.npy_bool[::1] {name}",
         scalar_advance="advance_boolean_field(pos)",
-        scalar_write="write_boolean_field(buffer, pos, {name})",
-        scalar_read="read_boolean_field(data, {pos})",
+        scalar_write="write_boolean_field(payload, pos, {name})",
+        scalar_read="read_boolean_field(payload, {pos})",
         itemsize_expr="cython.sizeof(cnp.npy_bool)",
         alignment=1,
         dtype_expr="np.bool_",
@@ -62,9 +62,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     uint8: PrimitiveCodegenInfo(
         scalar_decl="uint8_t {name}",
         view_decl="const uint8_t[::1] {name}",
-        scalar_advance="advance_uint8_field(pos, align_offset)",
-        scalar_write="write_uint8_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_uint8_field(data, {pos}, align_offset)",
+        scalar_advance="advance_uint8_field(pos)",
+        scalar_write="write_uint8_field(payload, pos, {name})",
+        scalar_read="read_uint8_field(payload, {pos})",
         itemsize_expr="cython.sizeof(uint8_t)",
         alignment=1,
         dtype_expr="np.uint8",
@@ -73,9 +73,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     int8: PrimitiveCodegenInfo(
         scalar_decl="int8_t {name}",
         view_decl="const int8_t[::1] {name}",
-        scalar_advance="advance_int8_field(pos, align_offset)",
-        scalar_write="write_int8_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_int8_field(data, {pos}, align_offset)",
+        scalar_advance="advance_int8_field(pos)",
+        scalar_write="write_int8_field(payload, pos, {name})",
+        scalar_read="read_int8_field(payload, {pos})",
         itemsize_expr="cython.sizeof(int8_t)",
         alignment=1,
         dtype_expr="np.int8",
@@ -84,9 +84,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     int16: PrimitiveCodegenInfo(
         scalar_decl="int16_t {name}",
         view_decl="const int16_t[::1] {name}",
-        scalar_advance="advance_int16_field(pos, align_offset)",
-        scalar_write="write_int16_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_int16_field(data, {pos}, align_offset)",
+        scalar_advance="advance_int16_field(pos)",
+        scalar_write="write_int16_field(payload, pos, {name})",
+        scalar_read="read_int16_field(payload, {pos})",
         itemsize_expr="cython.sizeof(int16_t)",
         alignment=2,
         dtype_expr="np.int16",
@@ -95,9 +95,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     uint16: PrimitiveCodegenInfo(
         scalar_decl="uint16_t {name}",
         view_decl="const uint16_t[::1] {name}",
-        scalar_advance="advance_uint16_field(pos, align_offset)",
-        scalar_write="write_uint16_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_uint16_field(data, {pos}, align_offset)",
+        scalar_advance="advance_uint16_field(pos)",
+        scalar_write="write_uint16_field(payload, pos, {name})",
+        scalar_read="read_uint16_field(payload, {pos})",
         itemsize_expr="cython.sizeof(uint16_t)",
         alignment=2,
         dtype_expr="np.uint16",
@@ -106,9 +106,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     int32: PrimitiveCodegenInfo(
         scalar_decl="int32_t {name}",
         view_decl="const int32_t[::1] {name}",
-        scalar_advance="advance_int32_field(pos, align_offset)",
-        scalar_write="write_int32_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_int32_field(data, {pos}, align_offset)",
+        scalar_advance="advance_int32_field(pos)",
+        scalar_write="write_int32_field(payload, pos, {name})",
+        scalar_read="read_int32_field(payload, {pos})",
         itemsize_expr="cython.sizeof(int32_t)",
         alignment=4,
         dtype_expr="np.int32",
@@ -117,9 +117,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     uint32: PrimitiveCodegenInfo(
         scalar_decl="uint32_t {name}",
         view_decl="const uint32_t[::1] {name}",
-        scalar_advance="advance_uint32_field(pos, align_offset)",
-        scalar_write="write_uint32_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_uint32_field(data, {pos}, align_offset)",
+        scalar_advance="advance_uint32_field(pos)",
+        scalar_write="write_uint32_field(payload, pos, {name})",
+        scalar_read="read_uint32_field(payload, {pos})",
         itemsize_expr="cython.sizeof(uint32_t)",
         alignment=4,
         dtype_expr="np.uint32",
@@ -128,9 +128,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     int64: PrimitiveCodegenInfo(
         scalar_decl="int64_t {name}",
         view_decl="const int64_t[::1] {name}",
-        scalar_advance="advance_int64_field(pos, align_offset)",
-        scalar_write="write_int64_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_int64_field(data, {pos}, align_offset)",
+        scalar_advance="advance_int64_field(pos)",
+        scalar_write="write_int64_field(payload, pos, {name})",
+        scalar_read="read_int64_field(payload, {pos})",
         itemsize_expr="cython.sizeof(int64_t)",
         alignment=8,
         dtype_expr="np.int64",
@@ -139,9 +139,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     uint64: PrimitiveCodegenInfo(
         scalar_decl="uint64_t {name}",
         view_decl="const uint64_t[::1] {name}",
-        scalar_advance="advance_uint64_field(pos, align_offset)",
-        scalar_write="write_uint64_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_uint64_field(data, {pos}, align_offset)",
+        scalar_advance="advance_uint64_field(pos)",
+        scalar_write="write_uint64_field(payload, pos, {name})",
+        scalar_read="read_uint64_field(payload, {pos})",
         itemsize_expr="cython.sizeof(uint64_t)",
         alignment=8,
         dtype_expr="np.uint64",
@@ -150,9 +150,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     float32: PrimitiveCodegenInfo(
         scalar_decl="cnp.float32_t {name}",
         view_decl="const cnp.float32_t[::1] {name}",
-        scalar_advance="advance_float32_field(pos, align_offset)",
-        scalar_write="write_float32_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_float32_field(data, {pos}, align_offset)",
+        scalar_advance="advance_float32_field(pos)",
+        scalar_write="write_float32_field(payload, pos, {name})",
+        scalar_read="read_float32_field(payload, {pos})",
         itemsize_expr="cython.sizeof(cnp.float32_t)",
         alignment=4,
         dtype_expr="np.float32",
@@ -161,9 +161,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     float64: PrimitiveCodegenInfo(
         scalar_decl="cnp.float64_t {name}",
         view_decl="const cnp.float64_t[::1] {name}",
-        scalar_advance="advance_float64_field(pos, align_offset)",
-        scalar_write="write_float64_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_float64_field(data, {pos}, align_offset)",
+        scalar_advance="advance_float64_field(pos)",
+        scalar_write="write_float64_field(payload, pos, {name})",
+        scalar_read="read_float64_field(payload, {pos})",
         itemsize_expr="cython.sizeof(cnp.float64_t)",
         alignment=8,
         dtype_expr="np.float64",
@@ -172,9 +172,9 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     string: PrimitiveCodegenInfo(
         scalar_decl="bytes {name}",
         view_decl="object {name}",
-        scalar_advance="advance_string_field(pos, {name}, align_offset)",
-        scalar_write="write_string_field(buffer, pos, {name}, align_offset)",
-        scalar_read="read_string_field(data, {pos}, align_offset)",
+        scalar_advance="advance_string_field(pos, {name})",
+        scalar_write="write_string_field(payload, pos, {name})",
+        scalar_read="read_string_field(payload, {pos})",
         itemsize_expr="",
         alignment=4,
         dtype_expr="",
@@ -257,14 +257,6 @@ def _string_list_name(field_name: str) -> str:
 
 
 def _runtime_field_name(field_name: str, field_spec: FlatField) -> str:
-    """Return the local name used in generated code for one field.
-
-    String collections accept either ``np.bytes_`` arrays or ``list[bytes]``.
-    Generated functions normalize them once into a typed ``list`` and then use
-    that list throughout the size/write hot path.
-    """
-    if _is_ndarray_annotation(field_spec) and _ndarray_element_type(field_spec) is string:
-        return _string_list_name(field_name)
     return field_name
 
 
@@ -324,21 +316,21 @@ def _size_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
         ]
         if primitive_type is string:
             lines.append(
-                f"    pos = advance_string_array_position(pos, {runtime_name}, align_offset)"
+                f"    pos = advance_string_array_position(pos, {runtime_name})"
             )
         else:
             lines.append(
                 "    pos = advance_primitive_array_position("
-                f"pos, {length_expr}, {info.itemsize_expr}, {info.alignment}, align_offset)"
+                f"pos, {length_expr}, {info.itemsize_expr}, {info.alignment})"
             )
         return lines
 
     if primitive_type is string:
-        return [f"    pos = advance_string_sequence_position(pos, {runtime_name}, align_offset)"]
+        return [f"    pos = advance_string_sequence_position(pos, {runtime_name})"]
 
     return [
         "    pos = advance_primitive_sequence_position("
-        f"pos, {field_name}.shape[0], {info.itemsize_expr}, {info.alignment}, align_offset)"
+        f"pos, {field_name}.shape[0], {info.itemsize_expr}, {info.alignment})"
     ]
 
 
@@ -388,23 +380,23 @@ def _serialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[s
         ]
         if primitive_type is string:
             lines.append(
-                f"    pos = write_string_array(buffer, pos, {runtime_name}, align_offset)"
+                f"    pos = write_string_array(payload, pos, {runtime_name})"
             )
         else:
             lines.append(
                 "    pos = write_primitive_array("
-                f"buffer, pos, {info.pointer_expr.format(name=field_name)}, "
-                f"{length_expr}, {info.itemsize_expr}, {info.alignment}, align_offset)"
+                f"payload, pos, {info.pointer_expr.format(name=field_name)}, "
+                f"{length_expr}, {info.itemsize_expr}, {info.alignment})"
             )
         return lines
 
     if primitive_type is string:
-        return [f"    pos = write_string_sequence(buffer, pos, {runtime_name}, align_offset)"]
+        return [f"    pos = write_string_sequence(payload, pos, {runtime_name})"]
 
     return [
         "    pos = write_primitive_sequence("
-        f"buffer, pos, {info.pointer_expr.format(name=field_name)}, "
-        f"{field_name}.shape[0], {info.itemsize_expr}, {info.alignment}, align_offset)"
+        f"payload, pos, {info.pointer_expr.format(name=field_name)}, "
+        f"{field_name}.shape[0], {info.itemsize_expr}, {info.alignment})"
     ]
 
 
@@ -444,16 +436,24 @@ def _argument_block(fields: Mapping[str, FlatField], indent: int) -> str:
 
 
 def _deserialize_decl_block(fields: Mapping[str, FlatField]) -> str:
-    """Return the ``cdef object`` variable declarations for the deserialize function.
+    """Return the local variable declarations for the deserialize function.
 
     Args:
         fields: Ordered mapping from argument name to field schema.
 
     Returns:
-        A multi-line string of ``cdef object <name>`` declarations, one per
-        field, ready to be placed at the top of ``deserialize_<hash>``.
+        A multi-line string of ``cdef`` declarations, using typed C locals
+        for scalar primitives and ``object`` for collections, ready to be
+        placed at the top of ``deserialize_<hash>``.
     """
-    return "\n".join(f"    cdef object {field_name}" for field_name in fields)
+    lines: list[str] = []
+    for field_name, field_spec in fields.items():
+        if _is_ndarray_annotation(field_spec):
+            lines.append(f"    cdef object {field_name}")
+            continue
+        _, info = _field_info(field_spec)
+        lines.append(f"    cdef {info.scalar_decl.format(name=field_name)}")
+    return "\n".join(lines)
 
 
 def _deserialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
@@ -478,24 +478,24 @@ def _deserialize_lines_for_field(field_name: str, field_spec: FlatField) -> list
     if fixed_length is not None:
         if primitive_type is string:
             return [
-                f"    {field_name} = read_string_array_object(data, &pos, {fixed_length}, align_offset)"
+                f"    {field_name} = read_string_array_object(payload, &pos, {fixed_length})"
             ]
         return [
             "    "
             f"{field_name} = read_primitive_array_object("
-            f"data, &pos, {fixed_length}, {info.itemsize_expr}, {info.alignment}, "
-            f"align_offset, {info.dtype_expr})"
+            f"payload, &pos, {fixed_length}, {info.itemsize_expr}, {info.alignment}, "
+            f"{info.dtype_expr})"
         ]
 
     if primitive_type is string:
         return [
-            f"    {field_name} = read_string_sequence_object(data, &pos, align_offset)"
+            f"    {field_name} = read_string_sequence_object(payload, &pos)"
         ]
 
     return [
         "    "
         f"{field_name} = read_primitive_sequence_object("
-        f"data, &pos, {info.itemsize_expr}, {info.alignment}, align_offset, {info.dtype_expr})"
+        f"payload, &pos, {info.itemsize_expr}, {info.alignment}, {info.dtype_expr})"
     ]
 
 
@@ -576,8 +576,6 @@ def generate_cython_codec_module_source(
     deserialize_declarations = _deserialize_decl_block(fields)
     deserialize_body = _deserialize_body(fields)
     return_tuple = _return_tuple_block(fields)
-    string_collection_normalization = _string_collection_normalization_block(fields)
-
     return f'''# cython: language_level=3
 # cython: boundscheck=False
 # cython: wraparound=False
@@ -626,7 +624,6 @@ from cydr._every_supported_cython cimport (
     int32_sequence_ptr,
     int64_sequence_ptr,
     int8_sequence_ptr,
-    normalize_string_collection,
     read_boolean_field,
     read_float32_field,
     read_float64_field,
@@ -673,25 +670,22 @@ from cydr._every_supported_cython cimport (
 cpdef Py_ssize_t compute_serialized_size_{serializer_name}(
     {signature},
 ) except -1:
-    cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
-{string_collection_normalization}
+    cdef Py_ssize_t pos = 0
 
 {compute_body}
-    return pos
+    return pos + ENCAPSULATION_HEADER_SIZE
 
 
 cpdef bytearray serialize_{serializer_name}(
     {signature},
 ):
-{string_collection_normalization}
     cdef Py_ssize_t total_size = compute_serialized_size_{serializer_name}(
 {call_args},
     )
     cdef bytearray output = bytearray(total_size)
     cdef unsigned char* buffer = <unsigned char*> PyByteArray_AS_STRING(output)
-    cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+    cdef unsigned char* payload = buffer + ENCAPSULATION_HEADER_SIZE
+    cdef Py_ssize_t pos = 0
 
     write_encapsulation_header(buffer)
 
@@ -700,11 +694,14 @@ cpdef bytearray serialize_{serializer_name}(
 
 
 cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):
-    cdef Py_ssize_t pos = validate_encapsulation_header(data)
-    cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+    cdef const unsigned char[::1] payload
+    cdef Py_ssize_t pos = 0
 {deserialize_declarations}
 
+    validate_encapsulation_header(data)
+    payload = data[ENCAPSULATION_HEADER_SIZE:]
+
 {deserialize_body}
-    require_consumed(data, pos)
+    require_consumed(payload, pos)
 {return_tuple}
 '''

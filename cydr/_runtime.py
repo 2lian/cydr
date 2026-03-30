@@ -60,7 +60,7 @@ class GeneratedModuleInfo:
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
-_SCHEMA_HASH_VERSION = "cydr-codegen-v6"
+_SCHEMA_HASH_VERSION = "cydr-codegen-v7"
 _DEFAULT_CACHE_NAME = ".cydr_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("CYDR_CACHE_DIR")

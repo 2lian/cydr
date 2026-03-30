@@ -197,13 +197,15 @@ def test_generate_cython_codec_source_renders_expected_lines() -> None:
     source = generate_cython_codec_source(serializer_name, EVERY_SUPPORTED_SCHEMA)
 
     assert f"cpdef Py_ssize_t compute_serialized_size_{serializer_name}(" in source
-    assert "pos = advance_string_field(pos, header_frame_id, align_offset)" in source
-    assert "pos = write_string_field(buffer, pos, header_frame_id, align_offset)" in source
-    assert '_text_array_values = normalize_string_collection(text_array, "text_array")' in source
-    assert "pos = advance_string_array_position(pos, _text_array_values, align_offset)" in source
-    assert "pos = write_string_sequence(buffer, pos, _text_sequence_values, align_offset)" in source
+    assert "pos = advance_string_field(pos, header_frame_id)" in source
+    assert "cdef unsigned char* payload = buffer + ENCAPSULATION_HEADER_SIZE" in source
+    assert "pos = write_string_field(payload, pos, header_frame_id)" in source
+    assert "normalize_string_collection" not in source
+    assert "pos = advance_string_array_position(pos, text_array)" in source
+    assert "pos = write_string_sequence(payload, pos, text_sequence)" in source
     assert f"cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):" in source
-    assert "header_frame_id = read_string_field(data, &pos, align_offset)" in source
+    assert "payload = data[ENCAPSULATION_HEADER_SIZE:]" in source
+    assert "header_frame_id = read_string_field(payload, &pos)" in source
 
 
 def test_generate_cython_codec_source_supports_arbitrary_array_lengths() -> None:
@@ -223,7 +225,7 @@ def test_generate_cython_codec_source_supports_arbitrary_array_lengths() -> None
     source = generate_cython_codec_source("generated_array_length_schema", schema)
 
     assert 'require_fixed_length(samples.shape[0], 7, "samples")' in source
-    assert "read_primitive_array_object(data, &pos, 7," in source
+    assert "read_primitive_array_object(payload, &pos, 7," in source
     assert 'require_fixed_length(moments.shape[0], 5, "moments")' in source
 
 

@@ -14,9 +14,8 @@ cimport numpy as cnp
 
 cdef int ENCAPSULATION_HEADER_SIZE
 
-cdef Py_ssize_t validate_encapsulation_header(const unsigned char[::1] data) except -1
+cdef void validate_encapsulation_header(const unsigned char[::1] data) except *
 cdef void require_consumed(const unsigned char[::1] data, Py_ssize_t pos) except *
-cdef list normalize_string_collection(object values, str field_name)
 cdef void require_fixed_length(
     Py_ssize_t actual_count,
     Py_ssize_t expected_count,
@@ -30,25 +29,21 @@ cdef Py_ssize_t advance_primitive_array_position(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_primitive_sequence_position(
     Py_ssize_t pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_string_array_position(
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept
+    object values,
+) except -1
 cdef Py_ssize_t advance_string_sequence_position(
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept
+    object values,
+) except -1
 cdef Py_ssize_t write_primitive_array(
     unsigned char* buffer,
     Py_ssize_t pos,
@@ -56,7 +51,6 @@ cdef Py_ssize_t write_primitive_array(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_primitive_sequence(
     unsigned char* buffer,
@@ -65,27 +59,23 @@ cdef Py_ssize_t write_primitive_sequence(
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_string_array(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept
+    object values,
+) except -1
 cdef Py_ssize_t write_string_sequence(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
-    Py_ssize_t align_offset,
-) noexcept
+    object values,
+) except -1
 cdef object read_primitive_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
     object dtype,
 )
 cdef object read_primitive_sequence_object(
@@ -93,19 +83,16 @@ cdef object read_primitive_sequence_object(
     Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
-    Py_ssize_t align_offset,
     object dtype,
 )
 cdef list read_string_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
-    Py_ssize_t align_offset,
 )
 cdef list read_string_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 
 cdef const void* bool_sequence_ptr(const cnp.npy_bool[::1] values) noexcept
@@ -122,92 +109,77 @@ cdef const void* float64_sequence_ptr(const cnp.float64_t[::1] values) noexcept
 cdef const void* float64_view_ptr(const cnp.float64_t[::1] values) noexcept
 
 cdef Py_ssize_t advance_boolean_field(Py_ssize_t pos) noexcept
-cdef Py_ssize_t advance_byte_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_int8_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_uint8_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_int16_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_uint16_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_int32_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_uint32_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_int64_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_uint64_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_float32_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_float64_field(Py_ssize_t pos, Py_ssize_t align_offset) noexcept
-cdef Py_ssize_t advance_string_field(Py_ssize_t pos, bytes value, Py_ssize_t align_offset) noexcept
+cdef Py_ssize_t advance_byte_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_int8_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_uint8_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_int16_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_uint16_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_int32_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_uint32_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_int64_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_uint64_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_float32_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_float64_field(Py_ssize_t pos) noexcept
+cdef Py_ssize_t advance_string_field(Py_ssize_t pos, bytes value) noexcept
 cdef Py_ssize_t advance_bool_sequence_field(
     Py_ssize_t pos,
     const cnp.npy_bool[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_byte_array_field(
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_int8_sequence_field(
     Py_ssize_t pos,
     const int8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_uint8_array_field(
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_int16_sequence_field(
     Py_ssize_t pos,
     const int16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_uint16_array_field(
     Py_ssize_t pos,
     const uint16_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_int32_sequence_field(
     Py_ssize_t pos,
     const int32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_uint32_array_field(
     Py_ssize_t pos,
     const uint32_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_int64_sequence_field(
     Py_ssize_t pos,
     const int64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_uint64_array_field(
     Py_ssize_t pos,
     const uint64_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_float32_sequence_field(
     Py_ssize_t pos,
     const cnp.float32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_float64_array_field(
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_float64_sequence_field(
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t advance_text_array_field(
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_text_sequence_field(
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1
 
 cdef Py_ssize_t write_boolean_field(
@@ -219,301 +191,247 @@ cdef Py_ssize_t write_byte_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint8_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int8_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int8_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint8_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint8_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int16_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int16_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint16_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint16_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int32_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint32_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     int64_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     uint64_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_float32_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     cnp.float32_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_float64_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     cnp.float64_t value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_string_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     bytes value,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_bool_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.npy_bool[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_byte_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int8_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint8_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint8_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int16_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint16_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint16_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int32_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint32_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_int64_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const int64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_uint64_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const uint64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_float32_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float32_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_float64_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_float64_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     const cnp.float64_t[::1] values,
-    Py_ssize_t align_offset,
 ) noexcept
 cdef Py_ssize_t write_text_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t write_text_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
     object values,
-    Py_ssize_t align_offset,
 ) except -1
 
-cdef object read_boolean_field(
+cdef bint read_boolean_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-)
-cdef object read_byte_field(
+) except? -1
+cdef uint8_t read_byte_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_int8_field(
+) except? 0
+cdef int8_t read_int8_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_uint8_field(
+) except? -1
+cdef uint8_t read_uint8_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_int16_field(
+) except? 0
+cdef int16_t read_int16_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_uint16_field(
+) except? -1
+cdef uint16_t read_uint16_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_int32_field(
+) except? 0
+cdef int32_t read_int32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_uint32_field(
+) except? -1
+cdef uint32_t read_uint32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_int64_field(
+) except? 0
+cdef int64_t read_int64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_uint64_field(
+) except? -1
+cdef uint64_t read_uint64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_float32_field(
+) except? 0
+cdef cnp.float32_t read_float32_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
-cdef object read_float64_field(
+) except? -1.0
+cdef cnp.float64_t read_float64_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
-)
+) except? -1.0
 cdef bytes read_string_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_bool_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_byte_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_int8_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_uint8_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_int16_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_uint16_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_int32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_uint32_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_int64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_uint64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_float32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_float64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_float64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
 cdef object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
-    Py_ssize_t align_offset,
 )
