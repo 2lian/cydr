@@ -5,15 +5,17 @@ import pytest
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit.idl import (
-    array,
+from typing import Any
+
+from nptyping import Bool, Bytes, Float32, Float64, Int16, Int32, NDArray, Shape, UInt32, UInt64
+
+from cydr.idl import (
     boolean,
     float32,
     float64,
     get_codec_for,
     int16,
     int32,
-    sequence,
     string,
     uint32,
     uint64,
@@ -98,7 +100,7 @@ SCALAR_ENVELOPE_SCHEMA = {
     "priority": uint32,
     "title": string,
     "header": HEADER_SCHEMA,
-    "samples": sequence(float64),
+    "samples": NDArray[Any, Float64],
 }
 
 
@@ -111,17 +113,17 @@ ACTUATOR_BANK_SCHEMA = {
         "enabled": boolean,
         "temperature": float32,
     },
-    "ids": array(string, 2),
-    "currents": sequence(int16),
+    "ids": NDArray[Shape["2"], Bytes],
+    "currents": NDArray[Any, Int16],
 }
 
 
 PACKET_WINDOW_SCHEMA = {
     "header": HEADER_SCHEMA,
-    "flags": sequence(boolean),
-    "window": array(uint64, 2),
-    "codes": sequence(int32),
-    "labels": sequence(string),
+    "flags": NDArray[Any, Bool],
+    "window": NDArray[Shape["2"], UInt64],
+    "codes": NDArray[Any, Int32],
+    "labels": NDArray[Any, Bytes],
 }
 
 
@@ -131,9 +133,9 @@ STAMPED_POSE_LITE_SCHEMA = {
         "x": float64,
         "y": float64,
     },
-    "variances": array(float64, 2),
-    "tags": array(string, 2),
-    "residuals": sequence(float32),
+    "variances": NDArray[Shape["2"], Float64],
+    "tags": NDArray[Shape["2"], Bytes],
+    "residuals": NDArray[Any, Float32],
 }
 
 
@@ -145,8 +147,8 @@ MISSION_STATUS_SCHEMA = {
         },
         "note": string,
     },
-    "moments": array(float64, 2),
-    "names": sequence(string),
+    "moments": NDArray[Shape["2"], Float64],
+    "names": NDArray[Any, Bytes],
 }
 
 
@@ -192,7 +194,7 @@ def build_actuator_bank_values() -> dict[str, object]:
             "enabled": False,
             "temperature": np.float32(21.75),
         },
-        "ids": [b"left", b"right"],
+        "ids": np.array([b"left", b"right"], dtype=np.bytes_),
         "currents": np.array([-10, 0, 10], dtype=np.int16),
     }
 
@@ -224,7 +226,7 @@ def build_packet_window_values() -> dict[str, object]:
         "flags": np.array([True, False, True, True], dtype=np.bool_),
         "window": np.array([123, 456], dtype=np.uint64),
         "codes": np.array([-3, 5, 8], dtype=np.int32),
-        "labels": [b"alpha", b"beta", b"gamma"],
+        "labels": np.array([b"alpha", b"beta", b"gamma"], dtype=np.bytes_),
     }
 
 
@@ -258,7 +260,7 @@ def build_stamped_pose_lite_values() -> dict[str, object]:
             "y": np.float64(-2.5),
         },
         "variances": np.array([0.5, 0.25], dtype=np.float64),
-        "tags": [b"front", b"vision"],
+        "tags": np.array([b"front", b"vision"], dtype=np.bytes_),
         "residuals": np.array([0.125, -0.25, 0.5], dtype=np.float32),
     }
 
@@ -292,7 +294,7 @@ def build_mission_status_values() -> dict[str, object]:
             "note": b"ready",
         },
         "moments": np.array([1.5, -3.0], dtype=np.float64),
-        "names": [b"alpha", b"omega"],
+        "names": np.array([b"alpha", b"omega"], dtype=np.bytes_),
     }
 
 

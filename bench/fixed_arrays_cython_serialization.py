@@ -4,18 +4,16 @@ import argparse
 from dataclasses import dataclass, field
 
 import numpy as np
+from nptyping import Bytes, Float32, Float64, NDArray, Shape, UInt32
 
 from cyclonedds_idl import IdlStruct, types
 
 from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
 from bench.schema import Time
-from xcdrjit import assert_messages_equal
-from xcdrjit.idl import (
-    CYTHON_CACHE_DIR,
+from cydr import assert_messages_equal
+from cydr.idl import (
+    CYDR_CACHE_DIR,
     XcdrStruct,
-    array,
-    float32,
-    float64,
     get_codec_for,
     int32,
     string,
@@ -61,18 +59,18 @@ class HeaderStruct(XcdrStruct):
 
 class FixedArrayPayloadSmallStruct(XcdrStruct):
     header: HeaderStruct
-    gains: array(float64, SMALL_ARRAY_LENGTH)
-    ids: array(uint32, SMALL_ARRAY_LENGTH)
-    temperatures: array(float32, SMALL_ARRAY_LENGTH)
-    labels: array(string, 4)
+    gains: NDArray[Shape["16"], Float64]
+    ids: NDArray[Shape["16"], UInt32]
+    temperatures: NDArray[Shape["16"], Float32]
+    labels: NDArray[Shape["4"], Bytes]
 
 
 class FixedArrayPayloadLargeStruct(XcdrStruct):
     header: HeaderStruct
-    gains: array(float64, LARGE_ARRAY_LENGTH)
-    ids: array(uint32, LARGE_ARRAY_LENGTH)
-    temperatures: array(float32, LARGE_ARRAY_LENGTH)
-    labels: array(string, 4)
+    gains: NDArray[Shape["10000"], Float64]
+    ids: NDArray[Shape["10000"], UInt32]
+    temperatures: NDArray[Shape["10000"], Float32]
+    labels: NDArray[Shape["4"], Bytes]
 
 
 FIXED_ARRAY_SMALL_SCHEMA = {
@@ -83,10 +81,10 @@ FIXED_ARRAY_SMALL_SCHEMA = {
         },
         "frame_id": string,
     },
-    "gains": array(float64, SMALL_ARRAY_LENGTH),
-    "ids": array(uint32, SMALL_ARRAY_LENGTH),
-    "temperatures": array(float32, SMALL_ARRAY_LENGTH),
-    "labels": array(string, 4),
+    "gains": NDArray[Shape["16"], Float64],
+    "ids": NDArray[Shape["16"], UInt32],
+    "temperatures": NDArray[Shape["16"], Float32],
+    "labels": NDArray[Shape["4"], Bytes],
 }
 
 
@@ -98,10 +96,10 @@ FIXED_ARRAY_LARGE_SCHEMA = {
         },
         "frame_id": string,
     },
-    "gains": array(float64, LARGE_ARRAY_LENGTH),
-    "ids": array(uint32, LARGE_ARRAY_LENGTH),
-    "temperatures": array(float32, LARGE_ARRAY_LENGTH),
-    "labels": array(string, 4),
+    "gains": NDArray[Shape["10000"], Float64],
+    "ids": NDArray[Shape["10000"], UInt32],
+    "temperatures": NDArray[Shape["10000"], Float32],
+    "labels": NDArray[Shape["4"], Bytes],
 }
 
 
@@ -117,7 +115,7 @@ def build_values(count: int) -> dict[str, object]:
         "gains": np.linspace(-1.0, 1.0, num=count, dtype=np.float64),
         "ids": np.arange(1000, 1000 + count, dtype=np.uint32),
         "temperatures": np.linspace(20.0, 80.0, num=count, dtype=np.float32),
-        "labels": [b"front", b"rear", b"left", b"right"],
+        "labels": np.array([b"front", b"rear", b"left", b"right"], dtype=np.bytes_),
     }
 
 
@@ -205,10 +203,10 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     deserialize = codec.deserialize
     payload = idl_message.serialize()
 
-    xcdrjit_dict_bytes = bytes(serialize(values))
-    xcdrjit_struct_bytes = bytes(struct_message.serialize())
-    assert xcdrjit_dict_bytes == payload
-    assert xcdrjit_struct_bytes == payload
+    cydr_dict_bytes = bytes(serialize(values))
+    cydr_struct_bytes = bytes(struct_message.serialize())
+    assert cydr_dict_bytes == payload
+    assert cydr_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, schema)
     assert_messages_equal(struct_type.deserialize(payload)._to_nested_dict(), values, schema)
     assert bytes(idl_type.deserialize(payload).serialize()) == payload
@@ -218,8 +216,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: serialize(values),
-            "xcdrjit_struct": lambda: struct_message.serialize(),
+            "cydr_dict": lambda: serialize(values),
+            "cydr_struct": lambda: struct_message.serialize(),
             "cyclonedds_idl": idl_message.serialize,
         },
     )
@@ -228,8 +226,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: deserialize(payload),
-            "xcdrjit_struct": lambda: struct_type.deserialize(payload),
+            "cydr_dict": lambda: deserialize(payload),
+            "cydr_struct": lambda: struct_type.deserialize(payload),
             "cyclonedds_idl": lambda: idl_type.deserialize(payload),
         },
     )
@@ -274,12 +272,12 @@ def main() -> int:
         "FixedArray Generated Codec Benchmark",
         [
             "Schema: local fixed-array schemas in bench/fixed_arrays_cython_serialization.py",
-            f"Cache dir: {CYTHON_CACHE_DIR}",
-            "Serialize: xcdrjit dict call is codec.serialize(values)",
-            "Serialize: xcdrjit struct call is message.serialize()",
+            f"Cache dir: {CYDR_CACHE_DIR}",
+            "Serialize: cydr dict call is codec.serialize(values)",
+            "Serialize: cydr struct call is message.serialize()",
             "Serialize: Cyclone call is idl_message.serialize()",
-            "Deserialize: xcdrjit dict call is codec.deserialize(payload)",
-            "Deserialize: xcdrjit struct call is Struct.deserialize(payload)",
+            "Deserialize: cydr dict call is codec.deserialize(payload)",
+            "Deserialize: cydr struct call is Struct.deserialize(payload)",
             "Deserialize: Cyclone call is IdlStruct.deserialize(payload)",
             "Fixed arrays exercised: float64, uint32, float32, and string arrays",
         ],

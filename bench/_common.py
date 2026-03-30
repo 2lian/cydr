@@ -65,7 +65,7 @@ def format_throughput_mib_per_second(payload_size: int, seconds: float) -> str:
 
 def print_environment(title: str, description_lines: list[str]) -> None:
     cyclonedds_version = importlib.metadata.version("cyclonedds-idl")
-    xcdrjit_version = importlib.metadata.version("xcdrjit")
+    cydr_version = importlib.metadata.version("cydr")
 
     print(title)
     for line in description_lines:
@@ -73,7 +73,7 @@ def print_environment(title: str, description_lines: list[str]) -> None:
     print(f"Python: {platform.python_version()}")
     print(f"NumPy: {np.__version__}")
     print(f"cyclonedds-idl: {cyclonedds_version}")
-    print(f"xcdrjit: {xcdrjit_version}")
+    print(f"cydr: {cydr_version}")
     print()
 
 

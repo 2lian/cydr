@@ -1,22 +1,22 @@
-# xcdrjit
+# `cydr` Cython CDR
 
-`xcdrjit` is a fast, opinionated `XCDR1` serializer and deserializer for Python. At runtime, it dynamically generates a small Cython codec for your schema, compiles it once, caches it, and reuses it on later calls. There is no compilation step for the user, we do it Just In Time (jit).
-
-The current target is common ROS 2 message shapes, not full DDS/XCDR coverage.
+`cydr` is a fast, opinionated `XCDR1` serializer and deserializer for Python. At runtime, it dynamically generates a small Cython codec for your schema, compiles it down to C and uses it to (de)serialize payloads. There is no compilation step for the user, we do it Just In Time using Cython.
 
 Priorities:
 
 1. SPEED
 2. Pythonic-style
+3. JIT compilation
 
-- primitive schema tokens:
+Supported types:
+- Primitive schema tokens:
   - `boolean`, `byte`
   - `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`
   - `float32`, `float64`
-  - `string`
-- collection schema helpers:
-  - `array(element_type, length)`
-  - `sequence(element_type)`
+  - `string` (UTF-8)
+- collection schema annotations:
+  - `NDArray[Any, dtype]`
+  - `NDArray[Shape["n"], dtype]`
 - `get_codec_for(...)`
 
 Runnable examples:
@@ -25,29 +25,28 @@ Runnable examples:
 - [`examples/roundtrip_xcdrstruct_message.py`](examples/roundtrip_xcdrstruct_message.py) for the higher-level `XcdrStruct` interface
 
 > [!WARNING]
-> `xcdrjit` prioritizes speed and therefore supports only a focused subset of XCDR1: little-endian XCDR1, plain nested structs, and fixed arrays / sequences of scalars and strings.
+> `cydr` prioritizes speed and therefore supports only a focused subset of XCDR1: little-endian XCDR1, plain nested structs, and fixed arrays / sequences of scalars and strings.
 >
-> To stay fast, `xcdrjit` is intentionally opinionated about runtime types. In particular, schema `string` means UTF-8 `bytes` at runtime, not Python `str`. The library does not do implicit string encoding or decoding for you.
+> To stay fast, `cydr` is intentionally opinionated about runtime types. In particular, schema `string` means UTF-8 `bytes` at runtime, not Python `str`. The library does not do implicit string encoding or decoding for you.
 >
 > Current constraints:
-> - `string` fields are `bytes`, and string arrays / sequences are `list[bytes]`
+> - `string` fields are `bytes`, and string arrays / sequences are NumPy arrays with `np.bytes_` dtype
+>   - `np.bytes_` dtype were introduced in `numpy>=2`. To not limit `numpy==1.*` users you can still serialize `list[bytes]` and deserialize using `deserialize(..., string_collections="list")`
 > - arrays and sequences must be 1D NumPy arrays with the matching dtype
-> - strings are much slower than numeric arrays, and large arrays / sequences of strings should be avoided if speed matters
-> - one long `string` is usually fine; many short strings are the expensive case
+> - string collections are much slower than numeric arrays, and large arrays / sequences of strings should be avoided if speed matters. One long `string` entry is fine.
+>   - One `100 KB` `string` deserialized in about `2.83 us`, while `10,000` short strings totaling a similar byte volume took about `302.07 us`.
 > - arrays or sequences of nested schemas are not supported
 > - enums, unions, optionals, bounded strings, `char` / `wchar`, XCDR2 mutable or appendable encodings, and big-endian targets are not supported
 >
-> On one local measurement, one `100 KB` `string` deserialized in about `2.83 us`, while `10,000` short strings totaling a similar byte volume took about `302.07 us`.
->
-> If you need anything outside that subset, use `cyclonedds_idl` directly. Contributions are welcome.
+> If you need anything outside this subset, use `cyclonedds_idl` directly. Contributions to extend our subset are however welcome!
 
 ## Benchmarks
 
-`xcdrjit` exists primarily to be faster than the general-purpose Python path while staying easy to call from Python.
+`cydr` exists primarily to be faster than the general-purpose Python path while staying easy to call from Python.
 
 Latest local benchmark results against `cyclonedds_idl`:
 
-| Benchmark | Case | `xcdrjit` | `cyclonedds_idl` | Speedup |
+| Benchmark | Case | `cydr` | `cyclonedds_idl` | Speedup |
 |---|---:|---:|---:|---:|
 | `JointState` | small | `2.51 us` | `15.40 us` | `6.14x` |
 | `JointState` | large | `66.54 us` | `9208.58 us` | `138.38x` |
@@ -65,13 +64,14 @@ These numbers were produced with:
 ## Quick Start
 
 ```python
-import numpy as np
+from typing import Any
 
-from xcdrjit.idl import (
-    float64,
+import numpy as np
+from nptyping import Bytes, Float64, NDArray
+
+from cydr.idl import (
     get_codec_for,
     int32,
-    sequence,
     string,
     uint32,
 )
@@ -84,8 +84,8 @@ schema = {
         },
         "frame_id": string,
     },
-    "name": sequence(string),
-    "position": sequence(float64),
+    "name": NDArray[Any, Bytes],
+    "position": NDArray[Any, Float64],
 }
 
 my_codec = get_codec_for(schema)
@@ -100,7 +100,7 @@ values = {
         },
         "frame_id": b"map",
     },
-    "name": [b"joint_a", b"joint_b"],
+    "name": np.array([b"joint_a", b"joint_b"], dtype=np.bytes_),
     "position": np.array([1.0, 2.0], dtype=np.float64),
 }
 
@@ -123,15 +123,15 @@ decoded = my_deserializer(payload)
   - `float32` -> `np.float32`
   - `float64` -> `np.float64`
 - `string` is the exception: it maps to UTF-8 `bytes`, not a NumPy string dtype.
-- `array(element_type, length)` defines a fixed-size collection of one schema token.
-- `sequence(element_type)` defines a variable-size collection of one schema token.
+- `NDArray[Any, dtype]` defines a variable-length 1D collection of one primitive dtype.
+- `NDArray[Shape["n"], dtype]` defines a fixed-length 1D collection of one primitive dtype.
 
 Runtime values:
 
 - scalar numeric and boolean fields can be plain Python scalars or NumPy scalars
 - numeric and boolean arrays/sequences should be 1D NumPy arrays with the matching dtype from the schema token
 - string fields are `bytes`
-- string arrays/sequences are `list[bytes]`
+- string arrays/sequences are NumPy arrays with `np.bytes_` dtype
 
 ## Runtime Conventions
 
@@ -145,10 +145,10 @@ This means schema order and runtime value order must match.
 
 Generated codecs are cached by the hash of the flattened field-type sequence.
 
-- Default cache dir: `./.xcdrjit_cache`
-- If that cannot be created, `xcdrjit` falls back to a temporary directory and emits a `RuntimeWarning`
-- Override globally with `XCDRJIT_CACHE_DIR=/path/to/cache`
-- Override for the whole process with `XCDRJIT_CACHE_DIR=/path/to/cache` before import
+- Default cache dir: `./.cydr_cache`
+- If that cannot be created, `cydr` falls back to a temporary directory and emits a `RuntimeWarning`
+- Override globally with `CYDR_CACHE_DIR=/path/to/cache`
+- Override for the whole process with `CYDR_CACHE_DIR=/path/to/cache` before import
 
 Test and benchmark schemas are defined next to those call sites instead of inside the library package.
 

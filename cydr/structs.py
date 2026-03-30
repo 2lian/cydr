@@ -1,8 +1,8 @@
-"""msgspec.Struct-based helpers for declaring xcdrjit messages."""
+"""msgspec.Struct-based helpers for declaring cydr messages."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Self, get_type_hints
+from typing import ClassVar, Literal, Self, get_type_hints
 
 import msgspec
 
@@ -33,16 +33,16 @@ class XcdrStruct(msgspec.Struct, gc=False):
     Field annotations reuse the same schema tokens as the low-level dict API:
 
     - primitive tokens such as ``int32`` or ``float64``
-    - ``array(element_type, length)``
-    - ``sequence(element_type)``
+    - ``NDArray[Any, dtype]`` for variable-length sequences
+    - ``NDArray[Shape['n'], dtype]`` for fixed-length arrays
     - nested ``XcdrStruct`` subclasses
 
     Instances can expose the same nested-dict and flat-value views used by the
-    lower-level xcdrjit runtime.
+    lower-level cydr runtime.
     """
 
-    _xcdr_schema_info: ClassVar[_SchemaInfo | None] = None
-    _xcdr_codec: ClassVar[Codec | None] = None
+    _cydr_schema_info: ClassVar[_SchemaInfo | None] = None
+    _cydr_codec: ClassVar[Codec | None] = None
 
     @classmethod
     def _schema_info(cls) -> _SchemaInfo:
@@ -59,7 +59,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
             TypeError: If any field annotation is not a supported schema token
                 or nested ``XcdrStruct`` subclass.
         """
-        cached: _SchemaInfo | None = cls.__dict__.get("_xcdr_schema_info")
+        cached: _SchemaInfo | None = cls.__dict__.get("_cydr_schema_info")
         if cached is not None:
             return cached
 
@@ -84,8 +84,8 @@ class XcdrStruct(msgspec.Struct, gc=False):
             except TypeError as exc:
                 raise TypeError(
                     f"{cls.__name__}.{field_name} uses unsupported annotation "
-                    f"{annotation!r}. Use xcdrjit schema tokens, array(...), "
-                    f"sequence(...), or a nested XcdrStruct subclass."
+                    f"{annotation!r}. Use cydr schema tokens, "
+                    f"NDArray[Any, dtype], NDArray[Shape['n'], dtype], or a nested XcdrStruct subclass."
                 ) from exc
             schema[field_name] = annotation
 
@@ -96,7 +96,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
             schema=schema,
             flat_schema=flat_schema,
         )
-        cls._xcdr_schema_info = cached
+        cls._cydr_schema_info = cached
         return cached
 
     def _to_nested_dict(self) -> dict[str, object]:
@@ -167,13 +167,13 @@ class XcdrStruct(msgspec.Struct, gc=False):
     @classmethod
     def _get_codec(cls) -> Codec:
         """Return the cached codec for this struct."""
-        cached: Codec | None = cls.__dict__.get("_xcdr_codec")
+        cached: Codec | None = cls.__dict__.get("_cydr_codec")
 
         if cached is not None:
             return cached
 
         cached = get_codec_for(cls._schema_info().schema)
-        cls._xcdr_codec = cached
+        cls._cydr_codec = cached
         return cached
 
     def serialize(self) -> bytearray:
@@ -181,6 +181,16 @@ class XcdrStruct(msgspec.Struct, gc=False):
         return self.__class__._get_codec().serialize(self._to_flat())
 
     @classmethod
-    def deserialize(cls, data: object) -> Self:
+    def deserialize(
+        cls,
+        data: object,
+        string_collections: Literal["numpy"] | Literal["list"] = "numpy",
+    ) -> Self:
         """Deserialize one payload into this struct type."""
-        return cls._from_flat(cls._get_codec().deserialize(data, flat=True))
+        return cls._from_flat(
+            cls._get_codec().deserialize(
+                data,
+                flat=True,
+                string_collections=string_collections,
+            )
+        )

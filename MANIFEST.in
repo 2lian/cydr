@@ -1,2 +1,2 @@
 include README.md
-recursive-include xcdrjit *.pxd *.pyx py.typed
+recursive-include cydr *.pxd *.pyx py.typed

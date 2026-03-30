@@ -1,10 +1,10 @@
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
+from nptyping import Bool, Bytes, Float32, Float64, Int8, Int16, Int32, Int64, NDArray, Shape, UInt8, UInt16, UInt32, UInt64
 
-from xcdrjit.idl import (
+from cydr.idl import (
     XcdrStruct,
-    array,
     assert_messages_equal,
     boolean,
     byte,
@@ -16,7 +16,6 @@ from xcdrjit.idl import (
     int16,
     int32,
     int64,
-    sequence,
     string,
     uint8,
     uint16,
@@ -53,20 +52,20 @@ class EverySupportedMessage(XcdrStruct):
     float64_value: float64
     text: string
     header: Header
-    bool_sequence: sequence(boolean)
-    byte_array: array(byte, 3)
-    int8_sequence: sequence(int8)
-    uint8_array: array(uint8, 3)
-    int16_sequence: sequence(int16)
-    uint16_array: array(uint16, 2)
-    int32_sequence: sequence(int32)
-    uint32_array: array(uint32, 2)
-    int64_sequence: sequence(int64)
-    uint64_array: array(uint64, 2)
-    float32_sequence: sequence(float32)
-    float64_array: array(float64, 2)
-    text_array: array(string, 2)
-    text_sequence: sequence(string)
+    bool_sequence: NDArray[Any, Bool]
+    byte_array: NDArray[Shape["3"], UInt8]
+    int8_sequence: NDArray[Any, Int8]
+    uint8_array: NDArray[Shape["3"], UInt8]
+    int16_sequence: NDArray[Any, Int16]
+    uint16_array: NDArray[Shape["2"], UInt16]
+    int32_sequence: NDArray[Any, Int32]
+    uint32_array: NDArray[Shape["2"], UInt32]
+    int64_sequence: NDArray[Any, Int64]
+    uint64_array: NDArray[Shape["2"], UInt64]
+    float32_sequence: NDArray[Any, Float32]
+    float64_array: NDArray[Shape["2"], Float64]
+    text_array: NDArray[Shape["2"], Bytes]
+    text_sequence: NDArray[Any, Bytes]
 
 
 def build_values() -> dict[str, object]:
@@ -103,8 +102,8 @@ def build_values() -> dict[str, object]:
         "uint64_array": np.array([12, 13], dtype=np.uint64),
         "float32_sequence": np.array([1.5, -2.25], dtype=np.float32),
         "float64_array": np.array([3.5, -4.75], dtype=np.float64),
-        "text_array": [b"a", "café".encode("utf-8")],
-        "text_sequence": [b"bbb", "😀".encode("utf-8")],
+        "text_array": np.array([b"a", "café".encode("utf-8")], dtype=np.bytes_),
+        "text_sequence": np.array([b"bbb", "😀".encode("utf-8")], dtype=np.bytes_),
     }
 
 
@@ -115,45 +114,49 @@ def assert_flat_values_equal(actual: list[object], expected: list[object]) -> No
             assert isinstance(actual_value, np.ndarray)
             assert isinstance(expected_value, np.ndarray)
             assert actual_value.dtype == expected_value.dtype
-            assert np.array_equal(actual_value, expected_value, equal_nan=True)
+            assert np.array_equal(
+                actual_value,
+                expected_value,
+                equal_nan=np.issubdtype(actual_value.dtype, np.floating),
+            )
         else:
             assert actual_value == expected_value
 
 
-def test_xcdr_struct_schema_matches_expected_schema() -> None:
+def test_cydr_struct_schema_matches_expected_schema() -> None:
     assert Header._schema_info().schema == HEADER_SCHEMA
     assert EverySupportedMessage._schema_info().schema == EVERY_SUPPORTED_SCHEMA
 
 
-def test_xcdr_struct_flat_schema_matches_expected_flat_schema() -> None:
+def test_cydr_struct_flat_schema_matches_expected_flat_schema() -> None:
     assert (
         EverySupportedMessage._schema_info().flat_schema
         == flatten_schema_fields(EVERY_SUPPORTED_SCHEMA)
     )
 
 
-def test_xcdr_struct_to_nested_dict_matches_expected_values() -> None:
+def test_cydr_struct_to_nested_dict_matches_expected_values() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
 
     assert_messages_equal(message._to_nested_dict(), values, EVERY_SUPPORTED_SCHEMA)
 
 
-def test_xcdr_struct_to_flat_matches_expected_flat_values() -> None:
+def test_cydr_struct_to_flat_matches_expected_flat_values() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
 
     assert_flat_values_equal(message._to_flat(), flatten_runtime_values(values))
 
 
-def test_xcdr_struct_from_flat_matches_expected_values() -> None:
+def test_cydr_struct_from_flat_matches_expected_values() -> None:
     values = build_values()
     message = EverySupportedMessage._from_flat(flatten_runtime_values(values))
 
     assert_messages_equal(message._to_nested_dict(), values, EVERY_SUPPORTED_SCHEMA)
 
 
-def test_xcdr_struct_integrates_with_generated_serializer_helpers() -> None:
+def test_cydr_struct_integrates_with_generated_serializer_helpers() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
     codec = EverySupportedMessage._get_codec()
@@ -166,23 +169,23 @@ def test_xcdr_struct_integrates_with_generated_serializer_helpers() -> None:
     assert_messages_equal(codec.deserialize(payload), values, EVERY_SUPPORTED_SCHEMA)
 
 
-def test_xcdr_struct_caches_codec_on_child_class_not_parent() -> None:
+def test_cydr_struct_caches_codec_on_child_class_not_parent() -> None:
     class TinyMessage(XcdrStruct):
         value: int32
 
-    assert XcdrStruct.__dict__.get("_xcdr_codec") is None
-    assert TinyMessage.__dict__.get("_xcdr_codec") is None
+    assert XcdrStruct.__dict__.get("_cydr_codec") is None
+    assert TinyMessage.__dict__.get("_cydr_codec") is None
 
     TinyMessage._get_codec()
 
-    assert XcdrStruct.__dict__.get("_xcdr_codec") is None
-    codec = TinyMessage.__dict__.get("_xcdr_codec")
+    assert XcdrStruct.__dict__.get("_cydr_codec") is None
+    codec = TinyMessage.__dict__.get("_cydr_codec")
     assert codec is not None
     assert codec.serialize is not None
     assert codec.compute_size is not None
 
 
-def test_xcdr_struct_ignores_classvar_fields_in_schema() -> None:
+def test_cydr_struct_ignores_classvar_fields_in_schema() -> None:
     class MessageWithClassVar(XcdrStruct):
         value: int32
         label: ClassVar[string] = b"ignored"
@@ -198,7 +201,7 @@ def test_xcdr_struct_ignores_classvar_fields_in_schema() -> None:
     assert decoded.value == np.int32(7)
 
 
-def test_xcdr_struct_public_serialize_deserialize_roundtrip() -> None:
+def test_cydr_struct_public_serialize_deserialize_roundtrip() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
 
@@ -209,7 +212,25 @@ def test_xcdr_struct_public_serialize_deserialize_roundtrip() -> None:
     assert bytes(decoded.serialize()) == bytes(payload)
 
 
-def test_warmup_codec_supports_xcdr_struct_values() -> None:
+def test_cydr_struct_deserialize_can_return_list_string_collections() -> None:
+    values = build_values()
+    message = EverySupportedMessage._from_nested_dict(values)
+
+    decoded = EverySupportedMessage.deserialize(
+        message.serialize(),
+        string_collections="list",
+    )
+
+    assert decoded.text == values["text"]
+    assert decoded.header.frame_id == values["header"]["frame_id"]
+    assert isinstance(decoded.text_array, list)
+    assert isinstance(decoded.text_sequence, list)
+    assert decoded.text_array == values["text_array"].tolist()
+    assert decoded.text_sequence == values["text_sequence"].tolist()
+    assert bytes(decoded.serialize()) == bytes(message.serialize())
+
+
+def test_warmup_codec_supports_cydr_struct_values() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
 
@@ -218,7 +239,7 @@ def test_warmup_codec_supports_xcdr_struct_values() -> None:
     assert codec is EverySupportedMessage._get_codec()
 
 
-def test_warmup_codec_rejects_schema_for_xcdr_struct_values() -> None:
+def test_warmup_codec_rejects_schema_for_cydr_struct_values() -> None:
     values = build_values()
     message = EverySupportedMessage._from_nested_dict(values)
 

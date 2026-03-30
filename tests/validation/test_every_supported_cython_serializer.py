@@ -12,7 +12,7 @@ pyximport.install(
     setup_args={"include_dirs": np.get_include()},
 )
 
-from xcdrjit._every_supported_cython import (
+from cydr._every_supported_cython import (
     compute_serialized_size_every_supported_schema,
     deserialize_every_supported_schema,
     serialize_every_supported_schema,
@@ -121,8 +121,8 @@ def default_inputs() -> dict[str, object]:
         "uint64_array": np.zeros(2, dtype=np.uint64),
         "float32_sequence": np.array([], dtype=np.float32),
         "float64_array": np.zeros(2, dtype=np.float64),
-        "text_array": [b"", b""],
-        "text_sequence": [],
+        "text_array": np.array([b"", b""], dtype=np.bytes_),
+        "text_sequence": np.array([], dtype=np.bytes_),
     }
 
 
@@ -156,8 +156,8 @@ def non_default_inputs() -> dict[str, object]:
         "uint64_array": np.array([12, 13], dtype=np.uint64),
         "float32_sequence": np.array([1.5, -2.25], dtype=np.float32),
         "float64_array": np.array([3.5, -4.75], dtype=np.float64),
-        "text_array": [b"a", "café".encode("utf-8")],
-        "text_sequence": [b"bbb", "😀".encode("utf-8")],
+        "text_array": np.array([b"a", "café".encode("utf-8")], dtype=np.bytes_),
+        "text_sequence": np.array([b"bbb", "😀".encode("utf-8")], dtype=np.bytes_),
     }
 
 
@@ -337,8 +337,52 @@ def test_deserialize_every_supported_schema_roundtrips_against_cyclone(build_val
     assert roundtrip_values["header_frame_id"] == values["header_frame_id"]
     assert np.array_equal(roundtrip_values["bool_sequence"], values["bool_sequence"])
     assert np.array_equal(roundtrip_values["float64_array"], values["float64_array"])
-    assert roundtrip_values["text_array"] == values["text_array"]
-    assert roundtrip_values["text_sequence"] == values["text_sequence"]
+    assert np.array_equal(roundtrip_values["text_array"], values["text_array"])
+    assert np.array_equal(roundtrip_values["text_sequence"], values["text_sequence"])
+
+
+def test_manual_serializer_accepts_list_bytes_for_string_collections() -> None:
+    values = non_default_inputs()
+    values["text_array"] = [b"a", "café".encode("utf-8")]
+    values["text_sequence"] = [b"bbb", "😀".encode("utf-8")]
+
+    computed_size = compute_serialized_size_every_supported_schema(
+        values["boolean_value"],
+        values["byte_value"],
+        values["signed_int8"],
+        values["unsigned_int8"],
+        values["signed_int16"],
+        values["unsigned_int16"],
+        values["signed_int32"],
+        values["unsigned_int32"],
+        values["signed_int64"],
+        values["unsigned_int64"],
+        values["float32_value"],
+        values["float64_value"],
+        values["text"],
+        values["header_stamp_sec"],
+        values["header_stamp_nanosec"],
+        values["header_frame_id"],
+        values["bool_sequence"],
+        values["byte_array"],
+        values["int8_sequence"],
+        values["uint8_array"],
+        values["int16_sequence"],
+        values["uint16_array"],
+        values["int32_sequence"],
+        values["uint32_array"],
+        values["int64_sequence"],
+        values["uint64_array"],
+        values["float32_sequence"],
+        values["float64_array"],
+        values["text_array"],
+        values["text_sequence"],
+    )
+    cython_bytes = serialize_cython(values)
+    cyclone_bytes = serialize_cyclone(values)
+
+    assert computed_size == len(cython_bytes)
+    assert cython_bytes == cyclone_bytes
 
 
 def test_deserialize_every_supported_schema_returns_copies_for_numeric_collections() -> None:

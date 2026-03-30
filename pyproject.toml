@@ -5,7 +5,7 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xcdrjit"
+name = "cydr"
 version = "0.1.0"
 description = "Generate and cache Cython-backed XCDR1 serializers from nested Python schemas."
 readme = "README.md"
@@ -27,6 +27,7 @@ dependencies = [
     "Cython>=3.0,<4",
     "msgspec>=0.20.0,<0.21",
     "numpy>=2.0,<3",
+    "np2typing>=2.6.3,<3",
 ]
 
 [project.optional-dependencies]
@@ -39,10 +40,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["xcdrjit", "xcdrjit.*"]
+include = ["cydr", "cydr.*"]
 
 [tool.setuptools.package-data]
-xcdrjit = ["*.pxd", "*.pyx", "py.typed"]
+cydr = ["*.pxd", "*.pyx", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

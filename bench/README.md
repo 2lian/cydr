@@ -9,16 +9,16 @@ Active benchmarks:
 
 Both benchmark scripts are written around the public runtime API:
 
-1. Define a nested schema dictionary using primitive tokens plus `array(...)` / `sequence(...)`.
+1. Define a nested schema dictionary using primitive tokens plus `NDArray[Any, dtype]` / `NDArray[Shape["n"], dtype]`.
 2. Call `get_codec_for(schema)`.
 3. Build one nested runtime `dict` that mirrors the schema.
 4. Compare `bytes(serialize(values))` against `cyclonedds_idl`.
-5. Time `xcdrjit` against `idl_message.serialize()` with `timeit`.
+5. Time `cydr` against `idl_message.serialize()` with `timeit`.
 
 Runtime conventions in the benchmark match the public API:
 
 - scalar strings are `bytes`
-- string arrays and sequences are `list[bytes]`
+- string arrays and sequences are NumPy arrays with `np.bytes_` dtype
 - numeric arrays and sequences are 1D NumPy arrays
 - keys are ignored at call time, so insertion order must match the schema
 

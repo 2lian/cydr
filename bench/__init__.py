@@ -1,1 +1,1 @@
-"""Benchmark helpers for xcdrjit."""
+"""Benchmark helpers for cydr."""

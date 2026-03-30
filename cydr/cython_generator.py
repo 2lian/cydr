@@ -4,10 +4,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .schema_types import (
-    ArrayType,
     FlatField,
     NestedSchemaFields,
-    SequenceType,
+    _is_ndarray_annotation,
+    _ndarray_element_type,
+    _ndarray_fixed_length,
     boolean,
     float32,
     float64,
@@ -170,7 +171,7 @@ PRIMITIVE_CODEGEN: dict[object, PrimitiveCodegenInfo] = {
     ),
     string: PrimitiveCodegenInfo(
         scalar_decl="bytes {name}",
-        view_decl="list {name}",
+        view_decl="object {name}",
         scalar_advance="advance_string_field(pos, {name}, align_offset)",
         scalar_write="write_string_field(buffer, pos, {name}, align_offset)",
         scalar_read="read_string_field(data, {pos}, align_offset)",
@@ -186,17 +187,17 @@ def _field_info(field_spec: FlatField) -> tuple[object, PrimitiveCodegenInfo]:
     """Return the primitive type and its codegen info for one field spec.
 
     Args:
-        field_spec: One flat field schema — a primitive token, ``ArrayType``,
-            or ``SequenceType``.
+        field_spec: One flat field schema — a primitive token or an NDArray
+            annotation (sequence or fixed array).
 
     Returns:
-        A ``(primitive_type, PrimitiveCodegenInfo)`` pair.  For collection
-        specs the primitive type is the element type; for scalars it is the
-        field spec itself.
+        A ``(primitive_type, PrimitiveCodegenInfo)`` pair.  For NDArray specs
+        the primitive type is the element type; for scalars it is the field
+        spec itself.
     """
     primitive_type = (
-        field_spec.element_type
-        if isinstance(field_spec, (ArrayType, SequenceType))
+        _ndarray_element_type(field_spec)
+        if _is_ndarray_annotation(field_spec)
         else field_spec
     )
     return primitive_type, PRIMITIVE_CODEGEN[primitive_type]
@@ -214,7 +215,7 @@ def _field_decl(field_name: str, field_spec: FlatField) -> str:
         scalar or ``"const int32_t[::1] arg_0"`` for an array/sequence.
     """
     _, info = _field_info(field_spec)
-    if isinstance(field_spec, (ArrayType, SequenceType)):
+    if _is_ndarray_annotation(field_spec):
         return info.view_decl.format(name=field_name)
     return info.scalar_decl.format(name=field_name)
 
@@ -243,13 +244,55 @@ def _field_length_expr(field_name: str, primitive_type: object) -> str:
         primitive_type: The element type of the collection.
 
     Returns:
-        A Cython expression string that evaluates to the number of elements:
-        ``"PyList_GET_SIZE(arg_0)"`` for string lists or ``"arg_0.shape[0]"``
-        for NumPy views.
+        A Cython expression string that evaluates to the number of elements.
+        Collections are represented as NumPy arrays at runtime, so the length
+        always comes from ``shape[0]``.
     """
-    if primitive_type is string:
-        return f"PyList_GET_SIZE({field_name})"
     return f"{field_name}.shape[0]"
+
+
+def _string_list_name(field_name: str) -> str:
+    """Return the local list variable name for one string collection field."""
+    return f"_{field_name}_values"
+
+
+def _runtime_field_name(field_name: str, field_spec: FlatField) -> str:
+    """Return the local name used in generated code for one field.
+
+    String collections accept either ``np.bytes_`` arrays or ``list[bytes]``.
+    Generated functions normalize them once into a typed ``list`` and then use
+    that list throughout the size/write hot path.
+    """
+    if _is_ndarray_annotation(field_spec) and _ndarray_element_type(field_spec) is string:
+        return _string_list_name(field_name)
+    return field_name
+
+
+def _string_collection_normalization_block(fields: Mapping[str, FlatField]) -> str:
+    """Return local declarations and normalization lines for string collections."""
+    lines: list[str] = []
+
+    for field_name, field_spec in fields.items():
+        if not _is_ndarray_annotation(field_spec):
+            continue
+        if _ndarray_element_type(field_spec) is not string:
+            continue
+        list_name = _string_list_name(field_name)
+        lines.append(f"    cdef list {list_name}")
+
+    if lines:
+        lines.append("")
+
+    for field_name, field_spec in fields.items():
+        if not _is_ndarray_annotation(field_spec):
+            continue
+        if _ndarray_element_type(field_spec) is not string:
+            continue
+        lines.append(
+            f'    {_string_list_name(field_name)} = normalize_string_collection({field_name}, "{field_name}")'
+        )
+
+    return "\n".join(lines)
 
 
 def _size_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
@@ -264,18 +307,24 @@ def _size_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
         ``pos`` by the serialized byte count of this field.
     """
     primitive_type, info = _field_info(field_spec)
+    runtime_name = _runtime_field_name(field_name, field_spec)
 
-    if not isinstance(field_spec, (ArrayType, SequenceType)):
+    if not _is_ndarray_annotation(field_spec):
         return [f"    pos = {info.scalar_advance.format(name=field_name)}"]
 
-    if isinstance(field_spec, ArrayType):
-        length_expr = _field_length_expr(field_name, field_spec.element_type)
+    fixed_length = _ndarray_fixed_length(field_spec)
+    if fixed_length is not None:
+        length_expr = (
+            f"len({runtime_name})"
+            if primitive_type is string
+            else _field_length_expr(field_name, primitive_type)
+        )
         lines = [
-            f'    require_fixed_length({length_expr}, {field_spec.length}, "{field_name}")'
+            f'    require_fixed_length({length_expr}, {fixed_length}, "{field_name}")'
         ]
-        if field_spec.element_type is string:
+        if primitive_type is string:
             lines.append(
-                f"    pos = advance_string_array_position(pos, {field_name}, align_offset)"
+                f"    pos = advance_string_array_position(pos, {runtime_name}, align_offset)"
             )
         else:
             lines.append(
@@ -285,7 +334,7 @@ def _size_lines_for_field(field_name: str, field_spec: FlatField) -> list[str]:
         return lines
 
     if primitive_type is string:
-        return [f"    pos = advance_string_sequence_position(pos, {field_name}, align_offset)"]
+        return [f"    pos = advance_string_sequence_position(pos, {runtime_name}, align_offset)"]
 
     return [
         "    pos = advance_primitive_sequence_position("
@@ -322,18 +371,24 @@ def _serialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[s
         this field into ``buffer`` and advance ``pos``.
     """
     primitive_type, info = _field_info(field_spec)
+    runtime_name = _runtime_field_name(field_name, field_spec)
 
-    if not isinstance(field_spec, (ArrayType, SequenceType)):
+    if not _is_ndarray_annotation(field_spec):
         return [f"    pos = {info.scalar_write.format(name=field_name)}"]
 
-    if isinstance(field_spec, ArrayType):
-        length_expr = _field_length_expr(field_name, field_spec.element_type)
+    fixed_length = _ndarray_fixed_length(field_spec)
+    if fixed_length is not None:
+        length_expr = (
+            f"len({runtime_name})"
+            if primitive_type is string
+            else _field_length_expr(field_name, primitive_type)
+        )
         lines = [
-            f'    require_fixed_length({length_expr}, {field_spec.length}, "{field_name}")'
+            f'    require_fixed_length({length_expr}, {fixed_length}, "{field_name}")'
         ]
-        if field_spec.element_type is string:
+        if primitive_type is string:
             lines.append(
-                f"    pos = write_string_array(buffer, pos, {field_name}, align_offset)"
+                f"    pos = write_string_array(buffer, pos, {runtime_name}, align_offset)"
             )
         else:
             lines.append(
@@ -344,7 +399,7 @@ def _serialize_lines_for_field(field_name: str, field_spec: FlatField) -> list[s
         return lines
 
     if primitive_type is string:
-        return [f"    pos = write_string_sequence(buffer, pos, {field_name}, align_offset)"]
+        return [f"    pos = write_string_sequence(buffer, pos, {runtime_name}, align_offset)"]
 
     return [
         "    pos = write_primitive_sequence("
@@ -382,7 +437,10 @@ def _argument_block(fields: Mapping[str, FlatField], indent: int) -> str:
         ``compute_serialized_size_<hash>``.
     """
     padding = " " * indent
-    return ",\n".join(f"{padding}{field_name}" for field_name in fields)
+    return ",\n".join(
+        f"{padding}{_runtime_field_name(field_name, field_spec)}"
+        for field_name, field_spec in fields.items()
+    )
 
 
 def _deserialize_decl_block(fields: Mapping[str, FlatField]) -> str:
@@ -412,19 +470,20 @@ def _deserialize_lines_for_field(field_name: str, field_spec: FlatField) -> list
     """
     primitive_type, info = _field_info(field_spec)
 
-    if not isinstance(field_spec, (ArrayType, SequenceType)):
+    if not _is_ndarray_annotation(field_spec):
         # scalar_read uses {pos} as a placeholder; pass &pos for the pointer-advance API.
         return [f"    {field_name} = {info.scalar_read.format(pos='&pos')}"]
 
-    if isinstance(field_spec, ArrayType):
-        if field_spec.element_type is string:
+    fixed_length = _ndarray_fixed_length(field_spec)
+    if fixed_length is not None:
+        if primitive_type is string:
             return [
-                f"    {field_name} = read_string_array_object(data, &pos, {field_spec.length}, align_offset)"
+                f"    {field_name} = read_string_array_object(data, &pos, {fixed_length}, align_offset)"
             ]
         return [
             "    "
             f"{field_name} = read_primitive_array_object("
-            f"data, &pos, {field_spec.length}, {info.itemsize_expr}, {info.alignment}, "
+            f"data, &pos, {fixed_length}, {info.itemsize_expr}, {info.alignment}, "
             f"align_offset, {info.dtype_expr})"
         ]
 
@@ -517,6 +576,7 @@ def generate_cython_codec_module_source(
     deserialize_declarations = _deserialize_decl_block(fields)
     deserialize_body = _deserialize_body(fields)
     return_tuple = _return_tuple_block(fields)
+    string_collection_normalization = _string_collection_normalization_block(fields)
 
     return f'''# cython: language_level=3
 # cython: boundscheck=False
@@ -525,7 +585,6 @@ def generate_cython_codec_module_source(
 # cython: cdivision=True
 
 from cpython.bytearray cimport PyByteArray_AS_STRING
-from cpython.list cimport PyList_GET_SIZE
 from libc.stdint cimport (
     int8_t,
     int16_t,
@@ -542,7 +601,7 @@ import numpy as np
 cimport cython
 cimport numpy as cnp
 
-from xcdrjit._every_supported_cython cimport (
+from cydr._every_supported_cython cimport (
     ENCAPSULATION_HEADER_SIZE,
     advance_boolean_field,
     advance_float32_field,
@@ -567,6 +626,7 @@ from xcdrjit._every_supported_cython cimport (
     int32_sequence_ptr,
     int64_sequence_ptr,
     int8_sequence_ptr,
+    normalize_string_collection,
     read_boolean_field,
     read_float32_field,
     read_float64_field,
@@ -615,6 +675,7 @@ cpdef Py_ssize_t compute_serialized_size_{serializer_name}(
 ) except -1:
     cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
     cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
+{string_collection_normalization}
 
 {compute_body}
     return pos
@@ -623,6 +684,7 @@ cpdef Py_ssize_t compute_serialized_size_{serializer_name}(
 cpdef bytearray serialize_{serializer_name}(
     {signature},
 ):
+{string_collection_normalization}
     cdef Py_ssize_t total_size = compute_serialized_size_{serializer_name}(
 {call_args},
     )

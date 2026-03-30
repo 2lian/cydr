@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from xcdrjit.idl import assert_messages_equal
+from cydr.idl import assert_messages_equal
 
 from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA
 
@@ -40,8 +40,8 @@ def build_every_supported_values() -> dict[str, object]:
         "uint64_array": np.array([12, 13], dtype=np.uint64),
         "float32_sequence": np.array([1.5, -2.25], dtype=np.float32),
         "float64_array": np.array([3.5, -4.75], dtype=np.float64),
-        "text_array": [b"a", "café".encode("utf-8")],
-        "text_sequence": [b"bbb", "😀".encode("utf-8")],
+        "text_array": np.array([b"a", "café".encode("utf-8")], dtype=np.bytes_),
+        "text_sequence": np.array([b"bbb", "😀".encode("utf-8")], dtype=np.bytes_),
     }
 
 
@@ -54,7 +54,7 @@ def build_joint_state_values() -> dict[str, object]:
             },
             "frame_id": b"base_link",
         },
-        "name": [b"joint_a", b"joint_b", b"joint_c"],
+        "name": np.array([b"joint_a", b"joint_b", b"joint_c"], dtype=np.bytes_),
         "position": np.array([0.5, 1.5, 2.5], dtype=np.float64),
         "velocity": np.array([3.5, 4.5, 5.5], dtype=np.float64),
         "effort": np.array([6.5, 7.5, 8.5], dtype=np.float64),
@@ -117,7 +117,7 @@ def test_assert_messages_equal_detects_numpy_dtype_mismatch() -> None:
 def test_assert_messages_equal_detects_string_sequence_mismatch() -> None:
     msg_a = build_every_supported_values()
     msg_b = build_every_supported_values()
-    msg_b["text_sequence"] = [b"bbb", b"other"]
+    msg_b["text_sequence"] = np.array([b"bbb", b"other"], dtype=np.bytes_)
 
-    with pytest.raises(AssertionError, match=r"text_sequence\[1\]"):
+    with pytest.raises(AssertionError, match=r"text_sequence"):
         assert_messages_equal(msg_a, msg_b, EVERY_SUPPORTED_SCHEMA)

@@ -1,11 +1,14 @@
 """Schema fixtures shared by validation tests."""
 
 from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from nptyping import Bool, Bytes, Float32, Float64, Int8, Int16, Int32, Int64, NDArray, Shape, UInt8, UInt16, UInt32, UInt64
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit.idl import (
-    array,
+from cydr.idl import (
     boolean,
     byte,
     flatten_schema_fields,
@@ -15,7 +18,6 @@ from xcdrjit.idl import (
     int16,
     int32,
     int64,
-    sequence,
     string,
     uint8,
     uint16,
@@ -41,10 +43,10 @@ HEADER_SCHEMA = {
 
 JOINT_STATE_SCHEMA = {
     "header": HEADER_SCHEMA,
-    "name": sequence(string),
-    "position": sequence(float64),
-    "velocity": sequence(float64),
-    "effort": sequence(float64),
+    "name": NDArray[Any, Bytes],
+    "position": NDArray[Any, Float64],
+    "velocity": NDArray[Any, Float64],
+    "effort": NDArray[Any, Float64],
 }
 
 
@@ -63,20 +65,20 @@ EVERY_SUPPORTED_SCHEMA = {
     "float64_value": float64,
     "text": string,
     "header": HEADER_SCHEMA,
-    "bool_sequence": sequence(boolean),
-    "byte_array": array(byte, 3),
-    "int8_sequence": sequence(int8),
-    "uint8_array": array(uint8, 3),
-    "int16_sequence": sequence(int16),
-    "uint16_array": array(uint16, 2),
-    "int32_sequence": sequence(int32),
-    "uint32_array": array(uint32, 2),
-    "int64_sequence": sequence(int64),
-    "uint64_array": array(uint64, 2),
-    "float32_sequence": sequence(float32),
-    "float64_array": array(float64, 2),
-    "text_array": array(string, 2),
-    "text_sequence": sequence(string),
+    "bool_sequence": NDArray[Any, Bool],
+    "byte_array": NDArray[Shape["3"], UInt8],
+    "int8_sequence": NDArray[Any, Int8],
+    "uint8_array": NDArray[Shape["3"], UInt8],
+    "int16_sequence": NDArray[Any, Int16],
+    "uint16_array": NDArray[Shape["2"], UInt16],
+    "int32_sequence": NDArray[Any, Int32],
+    "uint32_array": NDArray[Shape["2"], UInt32],
+    "int64_sequence": NDArray[Any, Int64],
+    "uint64_array": NDArray[Shape["2"], UInt64],
+    "float32_sequence": NDArray[Any, Float32],
+    "float64_array": NDArray[Shape["2"], Float64],
+    "text_array": NDArray[Shape["2"], Bytes],
+    "text_sequence": NDArray[Any, Bytes],
 }
 
 

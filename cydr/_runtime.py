@@ -1,4 +1,4 @@
-"""Private runtime helpers for generated xcdrjit codecs."""
+"""Private runtime helpers for generated cydr codecs."""
 
 import hashlib
 import importlib
@@ -22,8 +22,11 @@ from .cython_generator import (
 from .schema_types import (
     FlatField,
     NestedSchemaFields,
+    _is_ndarray_annotation,
+    _ndarray_element_type,
     field_schema_token,
     flatten_schema_fields,
+    string,
 )
 
 
@@ -57,11 +60,11 @@ class GeneratedModuleInfo:
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
-_SCHEMA_HASH_VERSION = "xcdrjit-codegen-v5"
-_DEFAULT_CACHE_NAME = ".xcdrjit_cache"
+_SCHEMA_HASH_VERSION = "cydr-codegen-v6"
+_DEFAULT_CACHE_NAME = ".cydr_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
-_ENV_CACHE_DIR = os.environ.get("XCDRJIT_CACHE_DIR")
-_SHADOW_INIT = '"""Minimal shadow package for generated xcdrjit codecs."""\n'
+_ENV_CACHE_DIR = os.environ.get("CYDR_CACHE_DIR")
+_SHADOW_INIT = '"""Minimal shadow package for generated cydr codecs."""\n'
 _HELPER_BACKEND_FILES = (
     "_every_supported_cython.pyx",
     "_every_supported_cython.pxd",
@@ -73,10 +76,10 @@ def _resolve_cache_dir() -> Path:
     """Resolve the cache directory used for generated codecs.
 
     Resolution order:
-    1. The ``XCDRJIT_CACHE_DIR`` environment variable.
-    2. ``./.xcdrjit_cache`` in the current working directory.
+    1. The ``CYDR_CACHE_DIR`` environment variable.
+    2. ``./.cydr_cache`` in the current working directory.
 
-    If the default working-directory cache cannot be created, xcdrjit falls back
+    If the default working-directory cache cannot be created, cydr falls back
     to a temporary directory and emits a ``RuntimeWarning``.
     """
     if _ENV_CACHE_DIR is not None:
@@ -89,10 +92,10 @@ def _resolve_cache_dir() -> Path:
     except OSError as exc:
         global _FALLBACK_CACHE_DIR
         if _FALLBACK_CACHE_DIR is None:
-            _FALLBACK_CACHE_DIR = Path(tempfile.mkdtemp(prefix="xcdrjit_cache_"))
+            _FALLBACK_CACHE_DIR = Path(tempfile.mkdtemp(prefix="cydr_cache_"))
         warnings.warn(
             (
-                f"Could not create default xcdrjit cache directory "
+                f"Could not create default cydr cache directory "
                 f"{preferred_cache_dir!s}: {exc}. "
                 f"Falling back to temporary cache directory "
                 f"{_FALLBACK_CACHE_DIR!s}."
@@ -103,7 +106,60 @@ def _resolve_cache_dir() -> Path:
         return _FALLBACK_CACHE_DIR
 
 
-CYTHON_CACHE_DIR = _resolve_cache_dir()
+CYDR_CACHE_DIR = _resolve_cache_dir()
+
+
+def _normalize_string_collection_mode(string_collections: str) -> str:
+    """Validate the requested runtime container for decoded string collections."""
+    if string_collections in {"numpy", "list"}:
+        return string_collections
+    raise ValueError(
+        f"string_collections must be 'numpy' or 'list', got {string_collections!r}."
+    )
+
+
+def _string_collection_field_indices(
+    flattened_fields: dict[str, FlatField],
+) -> tuple[int, ...]:
+    """Return the flat field indices that correspond to string collections."""
+    return tuple(
+        index
+        for index, field_schema in enumerate(flattened_fields.values())
+        if _is_ndarray_annotation(field_schema)
+        and _ndarray_element_type(field_schema) is string
+    )
+
+
+def _coerce_decoded_string_collection(
+    value: object,
+    string_collections: str,
+) -> object:
+    """Return one decoded string collection in the requested runtime container."""
+    if string_collections == "list":
+        return value.tolist() if isinstance(value, np.ndarray) else value
+    if isinstance(value, np.ndarray):
+        return value
+    return np.asarray(value, dtype=np.bytes_)
+
+
+def _coerce_flat_decoded_values(
+    flat_values: tuple[object, ...],
+    string_collection_indices: tuple[int, ...],
+    string_collections: str,
+) -> tuple[object, ...]:
+    """Return flat decoded values with string collections in the requested mode."""
+    if not string_collection_indices:
+        return flat_values
+    if string_collections == "list":
+        return flat_values
+
+    converted_values = list(flat_values)
+    for index in string_collection_indices:
+        converted_values[index] = _coerce_decoded_string_collection(
+            converted_values[index],
+            string_collections,
+        )
+    return tuple(converted_values)
 
 
 def schema_hash(schema: NestedSchemaFields) -> str:
@@ -178,17 +234,17 @@ def rebuild_runtime_values(
 
 
 def _ensure_shadow_backend_package(cache_dir: Path) -> None:
-    """Prepare the ``xcdrjit`` shadow package inside the cache directory.
+    """Prepare the ``cydr`` shadow package inside the cache directory.
 
-    Generated modules ``cimport`` from ``xcdrjit._every_supported_cython``.
+    Generated modules ``cimport`` from ``cydr._every_supported_cython``.
     To allow ``pyximport`` to resolve that import from ``cache_dir``, this
-    function creates a minimal ``xcdrjit/`` package there with the helper
+    function creates a minimal ``cydr/`` package there with the helper
     ``.pyx`` and ``.pxd`` files linked or copied from the real package.
 
     Args:
         cache_dir: The root cache directory where generated modules live.
     """
-    shadow_package_dir = cache_dir / "xcdrjit"
+    shadow_package_dir = cache_dir / "cydr"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     if shadow_package_dir.is_symlink():
@@ -226,7 +282,7 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
     If a compiled ``.so`` already exists in ``cache_dir`` it is loaded
     directly.  Otherwise the ``.pyx`` source is compiled via ``pyximport``.
 
-    Before loading, the function checks whether ``xcdrjit._every_supported_cython``
+    Before loading, the function checks whether ``cydr._every_supported_cython``
     is already imported from a path outside ``cache_dir`` (e.g. a stale
     in-tree ``.so``).  If so, it evicts that entry so that pyximport will
     compile and load the shadow-package version instead.
@@ -242,15 +298,15 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
     if module_name in sys.modules:
         return sys.modules[module_name]
 
-    helper_module = sys.modules.get("xcdrjit._every_supported_cython")
+    helper_module = sys.modules.get("cydr._every_supported_cython")
     if helper_module is not None:
         helper_path = getattr(helper_module, "__file__", None)
-        cache_helper_dir = (cache_dir / "xcdrjit").resolve()
+        cache_helper_dir = (cache_dir / "cydr").resolve()
         if helper_path is None or not Path(helper_path).resolve().is_relative_to(cache_helper_dir):
-            sys.modules.pop("xcdrjit._every_supported_cython", None)
+            sys.modules.pop("cydr._every_supported_cython", None)
 
     # First make the shared Cython backend importable from the cache.
-    if "xcdrjit._every_supported_cython" not in sys.modules:
+    if "cydr._every_supported_cython" not in sys.modules:
         _ensure_shadow_backend_package(cache_dir)
 
         global _PYXIMPORT_READY
@@ -265,7 +321,7 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
         sys.path.insert(0, str(cache_dir))
         importlib.invalidate_caches()
         try:
-            importlib.import_module("xcdrjit._every_supported_cython")
+            importlib.import_module("cydr._every_supported_cython")
         finally:
             sys.path.remove(str(cache_dir))
 
@@ -364,6 +420,7 @@ def _wrap_schema_call(
 def _wrap_deserialize_call(
     function,
     schema: NestedSchemaFields,
+    flattened_fields: dict[str, FlatField],
     field_names: tuple[str, ...],
     schema_hash_value: str,
     cache_dir: Path,
@@ -371,8 +428,10 @@ def _wrap_deserialize_call(
     """Wrap a generated deserialize function for the public API.
 
     The wrapper calls the underlying Cython ``deserialize_<hash>`` function,
-    checks the returned flat tuple length, and either returns it directly
-    (``flat=True``) or rebuilds the nested dict via ``rebuild_runtime_values``.
+    checks the returned flat tuple length, converts decoded string collections
+    to the requested runtime container, and either returns the flat values
+    directly (``flat=True``) or rebuilds the nested dict via
+    ``rebuild_runtime_values``.
 
     Args:
         function: The generated Cython ``deserialize_<hash>`` function.
@@ -386,14 +445,20 @@ def _wrap_deserialize_call(
         A Python callable wrapping the generated deserialize function.
     """
     expected_arg_count = len(field_names)
+    string_collection_indices = _string_collection_field_indices(flattened_fields)
 
-    def wrapper(data, flat: bool = False):
+    def wrapper(data, flat: bool = False, string_collections: str = "numpy"):
         flat_values = function(data)
         if len(flat_values) != expected_arg_count:
             raise ValueError(
                 f"deserialize expected {expected_arg_count} flattened values, "
                 f"got {len(flat_values)}."
             )
+        flat_values = _coerce_flat_decoded_values(
+            flat_values,
+            string_collection_indices,
+            _normalize_string_collection_mode(string_collections),
+        )
         if flat:
             return flat_values
         return rebuild_runtime_values(schema, flat_values)
@@ -401,7 +466,8 @@ def _wrap_deserialize_call(
     wrapper.__name__ = "deserialize"
     wrapper.__doc__ = (
         f"deserialize for flattened fields {field_names}. "
-        "Returns a nested dict by default, or the flat decoded value tuple when called with flat=True."
+        "Returns a nested dict by default, or the flat decoded value tuple when called with flat=True. "
+        "Use string_collections='numpy' or 'list' to choose the runtime container for decoded string collections."
     )
     wrapper.field_names = field_names
     wrapper.schema_hash = schema_hash_value
@@ -426,7 +492,7 @@ def _load_generated_codec(
     Returns:
         A ``GeneratedModuleInfo`` with the loaded module and its metadata.
     """
-    resolved_cache_dir = CYTHON_CACHE_DIR
+    resolved_cache_dir = CYDR_CACHE_DIR
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
     flattened_fields = flatten_schema_fields(schema)
@@ -464,6 +530,7 @@ def get_codec_for(
     - ``codec.compute_size(values)`` returns the serialized byte length
     - ``codec.serialize(values)`` returns a ``bytearray`` containing the XCDR1 payload
     - ``codec.deserialize(data)`` returns a nested ``dict[str, object]``
+    - ``codec.deserialize(data, string_collections="list")`` returns string collections as ``list[bytes]``
     """
     module_info = _load_generated_codec(schema)
     compute_impl = getattr(
@@ -494,6 +561,7 @@ def get_codec_for(
     deserialize = _wrap_deserialize_call(
         deserialize_impl,
         schema,
+        module_info.flattened_fields,
         field_names,
         module_info.schema_hash,
         module_info.cache_dir,

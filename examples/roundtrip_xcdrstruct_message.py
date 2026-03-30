@@ -1,19 +1,18 @@
-"""End-to-end xcdrjit example using XcdrStruct."""
+"""End-to-end cydr example using XcdrStruct."""
 
 import os
 import time
 from pprint import pprint
+from typing import Any
 
 import msgspec
 import numpy as np
+from nptyping import Bytes, Float64, NDArray, Shape
 
-from xcdrjit.idl import (
-    CYTHON_CACHE_DIR,
+from cydr.idl import (
+    CYDR_CACHE_DIR,
     XcdrStruct,
-    array,
-    float64,
     int32,
-    sequence,
     string,
     uint32,
     warmup_codec,
@@ -32,19 +31,21 @@ class Header(XcdrStruct):
 
 class JointStateLite(XcdrStruct):
     header: Header = msgspec.field(default_factory=Header)
-    name: sequence(string) = msgspec.field(default_factory=list)
-    position: sequence(float64) = msgspec.field(
-        default_factory=lambda: np.array([], dtype=np.float64)
+    name: NDArray[Any, Bytes] = msgspec.field(
+        default_factory=lambda: np.empty(0, Bytes)
     )
-    effort: array(float64, 3) = msgspec.field(
-        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    position: NDArray[Any, Float64] = msgspec.field(
+        default_factory=lambda: np.array([], dtype=Float64)
+    )
+    effort: NDArray[Shape["30"], Float64] = msgspec.field(
+        default_factory=lambda: np.zeros(shape=(30,), dtype=Float64)
     )
 
 
 def main() -> None:
     print("Compiling or loading schema...")
-    print(f"Cache dir: {CYTHON_CACHE_DIR}")
-    print("Override at process start with XCDRJIT_CACHE_DIR=/path/to/cache")
+    print(f"Cache dir: {CYDR_CACHE_DIR}")
+    print("Override at process start with CYDR_CACHE_DIR=/path/to/cache")
     _ = JointStateLite._get_codec()
     print("Done")
 
@@ -54,9 +55,9 @@ def main() -> None:
             stamp=Stamp(sec=np.int32(17000), nanosec=np.uint32(1234)),
             frame_id=b"base_link",
         ),
-        name=[b"joint_a", b"joint_b", b"joint_c"],
+        name=np.array([b"joint_a", b"joint_b", b"joint_c"]),
         position=np.array([0.5, 1.5, 2.5], dtype=np.float64),
-        effort=np.array([3.5, 4.5, 5.5], dtype=np.float64),
+        effort=np.array([3.5, 4.5, 5.5]*10, dtype=np.float64),
     )
     print("Done")
 
@@ -79,10 +80,10 @@ def main() -> None:
     print("Verifying...")
     roundtrip_stable = bytes(decoded_message.serialize()) == bytes(payload)
     print(f"Roundtrip stable: {roundtrip_stable}")
-    if "XCDRJIT_CACHE_DIR" in os.environ:
-        print(f"XCDRJIT_CACHE_DIR={os.environ['XCDRJIT_CACHE_DIR']}")
+    if "CYDR_CACHE_DIR" in os.environ:
+        print(f"CYDR_CACHE_DIR={os.environ['CYDR_CACHE_DIR']}")
     else:
-        print("XCDRJIT_CACHE_DIR is not set")
+        print("CYDR_CACHE_DIR is not set")
 
     print(f"Payload size: {len(payload):_} bytes")
     print(

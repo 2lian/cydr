@@ -16,6 +16,7 @@ cdef int ENCAPSULATION_HEADER_SIZE
 
 cdef Py_ssize_t validate_encapsulation_header(const unsigned char[::1] data) except -1
 cdef void require_consumed(const unsigned char[::1] data, Py_ssize_t pos) except *
+cdef list normalize_string_collection(object values, str field_name)
 cdef void require_fixed_length(
     Py_ssize_t actual_count,
     Py_ssize_t expected_count,
@@ -200,14 +201,14 @@ cdef Py_ssize_t advance_float64_sequence_field(
 ) noexcept
 cdef Py_ssize_t advance_text_array_field(
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
 ) except -1
 cdef Py_ssize_t advance_text_sequence_field(
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept
+) except -1
 
 cdef Py_ssize_t write_boolean_field(
     unsigned char* buffer,
@@ -367,15 +368,15 @@ cdef Py_ssize_t write_float64_sequence_field(
 cdef Py_ssize_t write_text_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept
+) except -1
 cdef Py_ssize_t write_text_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept
+) except -1
 
 cdef object read_boolean_field(
     const unsigned char[::1] data,
@@ -506,12 +507,12 @@ cdef object read_float64_sequence_field(
     Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef list read_text_array_field(
+cdef object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef list read_text_sequence_field(
+cdef object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t align_offset,

@@ -1,7 +1,7 @@
 [workspace]
 authors = ["Neppel Elian <elian.neppel@posteo.eu>"]
 channels = ["conda-forge"]
-name = "xcdrjit"
+name = "cydr"
 platforms = ["linux-64"]
 version = "0.1.0"
 
@@ -25,5 +25,5 @@ msgspec = ">=0.20.0,<0.21"
 
 [pypi-dependencies]
 cyclonedds-idl = ">=0.1.0, <0.2"
-xcdrjit = { path = ".", editable = true }
+cydr = { path = ".", editable = true }
 np2typing = ">=2.6.3, <3"

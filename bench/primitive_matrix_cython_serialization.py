@@ -5,15 +5,15 @@ import types as python_types
 from dataclasses import dataclass
 
 import numpy as np
+from nptyping import NDArray, Shape
 
 from cyclonedds_idl import IdlStruct, types
 
 from bench._common import measure_runtime, print_environment
-from xcdrjit import assert_messages_equal
-from xcdrjit.idl import (
-    CYTHON_CACHE_DIR,
+from cydr import assert_messages_equal
+from cydr.idl import (
+    CYDR_CACHE_DIR,
     XcdrStruct,
-    array,
     boolean,
     byte,
     float32,
@@ -161,7 +161,7 @@ def build_array_value(spec: PrimitiveSpec, count: int, size_label: str) -> objec
             else LARGE_STRING_ARRAY_ITEM_LENGTH
         )
         item = b"x" * item_length
-        return [item] * count
+        return np.array([item] * count, dtype=np.bytes_)
 
     dtype = spec.numpy_dtype
     if dtype is None:
@@ -194,7 +194,7 @@ def build_array_value(spec: PrimitiveSpec, count: int, size_label: str) -> objec
 
 def build_idl_value(spec: PrimitiveSpec, runtime_value: object) -> object:
     if spec.name == "string":
-        if isinstance(runtime_value, list):
+        if isinstance(runtime_value, np.ndarray):
             return [value.decode("ascii") for value in runtime_value]
         return runtime_value.decode("ascii")
 
@@ -245,7 +245,9 @@ def build_case_specs() -> list[CaseSpec]:
 
         for size_label, count in (("small", SMALL_ARRAY_LENGTH), ("big", LARGE_ARRAY_LENGTH)):
             runtime_value = build_array_value(spec, count, size_label)
-            schema = {"value": array(spec.schema_token, count)}
+            element_type = np.bytes_ if spec.name == "string" else spec.schema_token
+            annotation = NDArray[Shape[str(count)], element_type]
+            schema = {"value": annotation}
             idl_class = make_idl_class(
                 f"{spec.name.title().replace('_', '')}Array{size_label.title()}Idl",
                 f"bench/msg/{spec.name}_array_{size_label}",
@@ -253,7 +255,7 @@ def build_case_specs() -> list[CaseSpec]:
             )
             struct_class = make_struct_class(
                 f"{spec.name.title().replace('_', '')}Array{size_label.title()}Struct",
-                array(spec.schema_token, count),
+                annotation,
             )
             cases.append(
                 CaseSpec(
@@ -286,13 +288,13 @@ def benchmark_case_spec(case: CaseSpec, repeat: int, min_time: float) -> CaseMea
     assert bytes(case.idl_class.deserialize(payload).serialize()) == payload
 
     serialize_functions = {
-        "xcdrjit_dict": lambda: codec.serialize(values),
-        "xcdrjit_struct": lambda: struct_message.serialize(),
+        "cydr_dict": lambda: codec.serialize(values),
+        "cydr_struct": lambda: struct_message.serialize(),
         "cyclonedds_idl": idl_message.serialize,
     }
     deserialize_functions = {
-        "xcdrjit_dict": lambda: codec.deserialize(payload),
-        "xcdrjit_struct": lambda: case.struct_class.deserialize(payload),
+        "cydr_dict": lambda: codec.deserialize(payload),
+        "cydr_struct": lambda: case.struct_class.deserialize(payload),
         "cyclonedds_idl": lambda: case.idl_class.deserialize(payload),
     }
 
@@ -312,11 +314,11 @@ def benchmark_case_spec(case: CaseSpec, repeat: int, min_time: float) -> CaseMea
 
     return CaseMeasurement(
         payload_size=len(payload),
-        serialize_dict_us=serialize_measurements["xcdrjit_dict"].best_seconds * 1_000_000,
-        serialize_struct_us=serialize_measurements["xcdrjit_struct"].best_seconds * 1_000_000,
+        serialize_dict_us=serialize_measurements["cydr_dict"].best_seconds * 1_000_000,
+        serialize_struct_us=serialize_measurements["cydr_struct"].best_seconds * 1_000_000,
         serialize_cyclone_us=serialize_measurements["cyclonedds_idl"].best_seconds * 1_000_000,
-        deserialize_dict_us=deserialize_measurements["xcdrjit_dict"].best_seconds * 1_000_000,
-        deserialize_struct_us=deserialize_measurements["xcdrjit_struct"].best_seconds * 1_000_000,
+        deserialize_dict_us=deserialize_measurements["cydr_dict"].best_seconds * 1_000_000,
+        deserialize_struct_us=deserialize_measurements["cydr_struct"].best_seconds * 1_000_000,
         deserialize_cyclone_us=deserialize_measurements["cyclonedds_idl"].best_seconds * 1_000_000,
     )
 
@@ -370,13 +372,13 @@ def main() -> int:
     print_environment(
         "Primitive Field Matrix Benchmark",
         [
-            f"Cache dir: {CYTHON_CACHE_DIR}",
+            f"Cache dir: {CYDR_CACHE_DIR}",
             "Cases: scalar and fixed-array primitive fields",
             f"Small array length: {SMALL_ARRAY_LENGTH}",
             f"Large array length: {LARGE_ARRAY_LENGTH}",
             f"Small string length: {SMALL_STRING_LENGTH}",
             f"Large string length: {LARGE_STRING_LENGTH}",
-            "Implementations: xcdrjit dict, xcdrjit struct, cyclonedds_idl",
+            "Implementations: cydr dict, cydr struct, cyclonedds_idl",
         ],
     )
 

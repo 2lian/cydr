@@ -1,8 +1,8 @@
-# xcdrjit Architecture
+# cydr Architecture
 
 ## Goal
 
-`xcdrjit` generates and caches Cython-backed XCDR1 codecs from nested Python schema dictionaries.
+`cydr` generates and caches Cython-backed XCDR1 codecs from nested Python schema dictionaries.
 
 The current supported subset is:
 
@@ -23,14 +23,14 @@ The library assumes the host machine is little-endian.
 
 ## Public API
 
-The user-facing API lives in [`xcdrjit/idl.py`](/home/elian/debug/cdr/xcdrjit/idl.py).
+The user-facing API lives in [`cydr/idl.py`](/home/elian/debug/cdr/cydr/idl.py).
 
 Naming plan:
 
 - public schema tokens are short nouns: `int32`, `float64`, `string`
 - public collection helpers are `array(...)` and `sequence(...)`
 - public compiled entrypoint is `get_codec_for(...)`
-- private compile/cache/runtime helpers live in [`xcdrjit/_runtime.py`](/home/elian/debug/cdr/xcdrjit/_runtime.py)
+- private compile/cache/runtime helpers live in [`cydr/_runtime.py`](/home/elian/debug/cdr/cydr/_runtime.py)
 
 Current user-facing functions:
 
@@ -61,7 +61,7 @@ This makes the generated module reusable for schemas that have the same flattene
 
 ### 1. Schema / Codegen Layer
 
-[`xcdrjit/cython_generator.py`](/home/elian/debug/cdr/xcdrjit/cython_generator.py)
+[`cydr/cython_generator.py`](/home/elian/debug/cdr/cydr/cython_generator.py)
 
 Responsibilities:
 
@@ -78,11 +78,11 @@ Important property:
 
 Public facade:
 
-- [`xcdrjit/idl.py`](/home/elian/debug/cdr/xcdrjit/idl.py)
+- [`cydr/idl.py`](/home/elian/debug/cdr/cydr/idl.py)
 
 Private runtime implementation:
 
-- [`xcdrjit/_runtime.py`](/home/elian/debug/cdr/xcdrjit/_runtime.py)
+- [`cydr/_runtime.py`](/home/elian/debug/cdr/cydr/_runtime.py)
 
 Responsibilities:
 
@@ -95,14 +95,14 @@ Responsibilities:
 Important property:
 
 - generated extensions are cached persistently
-- default cache directory is `./.xcdrjit_cache`
+- default cache directory is `./.cydr_cache`
 - if the default cache cannot be created, the runtime falls back to a temporary directory and emits a `RuntimeWarning`
-- the backend helper extension `xcdrjit._every_supported_cython` must be importable before a generated module can load
+- the backend helper extension `cydr._every_supported_cython` must be importable before a generated module can load
 
 ### 3. Backend Helper Layer
 
-[`xcdrjit/_every_supported_cython.pyx`](/home/elian/debug/cdr/xcdrjit/_every_supported_cython.pyx)
-[`xcdrjit/_every_supported_cython.pxd`](/home/elian/debug/cdr/xcdrjit/_every_supported_cython.pxd)
+[`cydr/_every_supported_cython.pyx`](/home/elian/debug/cdr/cydr/_every_supported_cython.pyx)
+[`cydr/_every_supported_cython.pxd`](/home/elian/debug/cdr/cydr/_every_supported_cython.pxd)
 
 Responsibilities:
 
@@ -170,7 +170,7 @@ This means these two schemas intentionally reuse the same generated module if th
 
 The wrapper layer carries the schema names and nesting shape.
 
-The version prefix in the hash lets `xcdrjit` evolve the generated module shape
+The version prefix in the hash lets `cydr` evolve the generated module shape
 without colliding with older cached serializer-only modules.
 
 ## Testing Layout
@@ -190,7 +190,7 @@ These verify:
 
 The generated test cache is shared across runs in:
 
-- [`.xcdrjit_cache`](/home/elian/debug/cdr/.xcdrjit_cache)
+- [`.cydr_cache`](/home/elian/debug/cdr/.cydr_cache)
 
 ## Deserializer Design
 

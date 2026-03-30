@@ -2,18 +2,19 @@
 
 import argparse
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from nptyping import Bool, Bytes, Float32, Float64, Int8, Int16, Int32, Int64, NDArray, Shape, UInt8, UInt16, UInt32, UInt64
 
 from cyclonedds_idl import IdlStruct, types
 
 from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
 from bench.schema import EVERY_SUPPORTED_SCHEMA, Time
-from xcdrjit import assert_messages_equal
-from xcdrjit.idl import (
-    CYTHON_CACHE_DIR,
+from cydr import assert_messages_equal
+from cydr.idl import (
+    CYDR_CACHE_DIR,
     XcdrStruct,
-    array,
     boolean,
     byte,
     float32,
@@ -23,7 +24,6 @@ from xcdrjit.idl import (
     int16,
     int32,
     int64,
-    sequence,
     string,
     uint8,
     uint16,
@@ -97,20 +97,20 @@ class EverySupportedMessage(XcdrStruct):
     float64_value: float64
     text: string
     header: HeaderStruct
-    bool_sequence: sequence(boolean)
-    byte_array: array(byte, 3)
-    int8_sequence: sequence(int8)
-    uint8_array: array(uint8, 3)
-    int16_sequence: sequence(int16)
-    uint16_array: array(uint16, 2)
-    int32_sequence: sequence(int32)
-    uint32_array: array(uint32, 2)
-    int64_sequence: sequence(int64)
-    uint64_array: array(uint64, 2)
-    float32_sequence: sequence(float32)
-    float64_array: array(float64, 2)
-    text_array: array(string, 2)
-    text_sequence: sequence(string)
+    bool_sequence: NDArray[Any, Bool]
+    byte_array: NDArray[Shape["3"], UInt8]
+    int8_sequence: NDArray[Any, Int8]
+    uint8_array: NDArray[Shape["3"], UInt8]
+    int16_sequence: NDArray[Any, Int16]
+    uint16_array: NDArray[Shape["2"], UInt16]
+    int32_sequence: NDArray[Any, Int32]
+    uint32_array: NDArray[Shape["2"], UInt32]
+    int64_sequence: NDArray[Any, Int64]
+    uint64_array: NDArray[Shape["2"], UInt64]
+    float32_sequence: NDArray[Any, Float32]
+    float64_array: NDArray[Shape["2"], Float64]
+    text_array: NDArray[Shape["2"], Bytes]
+    text_sequence: NDArray[Any, Bytes]
 
 
 def make_bool_sequence(count: int) -> np.ndarray:
@@ -125,8 +125,11 @@ def make_float_sequence(dtype: np.dtype, count: int, start: float, stop: float) 
     return np.linspace(start, stop, num=count, dtype=dtype)
 
 
-def make_text_sequence(count: int) -> list[bytes]:
-    return [f"text_{index:05d}".encode("utf-8") for index in range(count)]
+def make_text_sequence(count: int) -> np.ndarray:
+    return np.array(
+        [f"text_{index:05d}".encode("utf-8") for index in range(count)],
+        dtype=np.bytes_,
+    )
 
 
 def build_values(count: int) -> dict[str, object]:
@@ -163,7 +166,7 @@ def build_values(count: int) -> dict[str, object]:
         "uint64_array": np.array([12, 13], dtype=np.uint64),
         "float32_sequence": make_float_sequence(np.float32, count, -1.0, 1.0),
         "float64_array": np.array([3.5, -4.75], dtype=np.float64),
-        "text_array": [b"a", "café".encode("utf-8")],
+        "text_array": np.array([b"a", "café".encode("utf-8")], dtype=np.bytes_),
         "text_sequence": make_text_sequence(count),
     }
 
@@ -255,10 +258,10 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     struct_message = build_struct_message(values)
     payload = idl_message.serialize()
 
-    xcdrjit_dict_bytes = bytes(serialize(values))
-    xcdrjit_struct_bytes = bytes(struct_message.serialize())
-    assert xcdrjit_dict_bytes == payload
-    assert xcdrjit_struct_bytes == payload
+    cydr_dict_bytes = bytes(serialize(values))
+    cydr_struct_bytes = bytes(struct_message.serialize())
+    assert cydr_dict_bytes == payload
+    assert cydr_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, EVERY_SUPPORTED_SCHEMA)
     assert_messages_equal(
         EverySupportedMessage.deserialize(payload)._to_nested_dict(),
@@ -272,8 +275,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: serialize(values),
-            "xcdrjit_struct": lambda: struct_message.serialize(),
+            "cydr_dict": lambda: serialize(values),
+            "cydr_struct": lambda: struct_message.serialize(),
             "cyclonedds_idl": idl_message.serialize,
         },
     )
@@ -282,8 +285,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: deserialize(payload),
-            "xcdrjit_struct": lambda: EverySupportedMessage.deserialize(payload),
+            "cydr_dict": lambda: deserialize(payload),
+            "cydr_struct": lambda: EverySupportedMessage.deserialize(payload),
             "cyclonedds_idl": lambda: EverySupportedSchema.deserialize(payload),
         },
     )
@@ -328,12 +331,12 @@ def main() -> int:
         "EverySupportedSchema Generated Codec Benchmark",
         [
             "Schema: EVERY_SUPPORTED_SCHEMA from bench/schema.py",
-            f"Cache dir: {CYTHON_CACHE_DIR}",
-            "Serialize: xcdrjit dict call is codec.serialize(values)",
-            "Serialize: xcdrjit struct call is message.serialize()",
+            f"Cache dir: {CYDR_CACHE_DIR}",
+            "Serialize: cydr dict call is codec.serialize(values)",
+            "Serialize: cydr struct call is message.serialize()",
             "Serialize: Cyclone call is idl_message.serialize()",
-            "Deserialize: xcdrjit dict call is codec.deserialize(payload)",
-            "Deserialize: xcdrjit struct call is EverySupportedMessage.deserialize(payload)",
+            "Deserialize: cydr dict call is codec.deserialize(payload)",
+            "Deserialize: cydr struct call is EverySupportedMessage.deserialize(payload)",
             "Deserialize: Cyclone call is EverySupportedSchema.deserialize(payload)",
             "Dict runtime input is one nested dict; struct runtime input is one XcdrStruct instance",
         ],

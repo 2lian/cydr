@@ -2,15 +2,17 @@
 
 import argparse
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from nptyping import Bytes, Float64, NDArray
 
 from cyclonedds_idl import IdlStruct, types
 
 from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
 from bench.schema import JOINT_STATE_SCHEMA, Time
-from xcdrjit import assert_messages_equal
-from xcdrjit.idl import CYTHON_CACHE_DIR, XcdrStruct, float64, get_codec_for, int32, sequence, string, uint32
+from cydr import assert_messages_equal
+from cydr.idl import CYDR_CACHE_DIR, XcdrStruct, get_codec_for, int32, string, uint32
 
 
 SMALL_SEQUENCE_LENGTH = 8
@@ -42,18 +44,21 @@ class HeaderStruct(XcdrStruct):
 
 class JointStateStruct(XcdrStruct):
     header: HeaderStruct
-    name: sequence(string)
-    position: sequence(float64)
-    velocity: sequence(float64)
-    effort: sequence(float64)
+    name: NDArray[Any, Bytes]
+    position: NDArray[Any, Float64]
+    velocity: NDArray[Any, Float64]
+    effort: NDArray[Any, Float64]
 
 
 def make_float_sequence(count: int, start: float, stop: float) -> np.ndarray:
     return np.linspace(start, stop, num=count, dtype=np.float64)
 
 
-def make_joint_names(count: int) -> list[bytes]:
-    return [f"joint_{index:05d}".encode("ascii") for index in range(count)]
+def make_joint_names(count: int) -> np.ndarray:
+    return np.array(
+        [f"joint_{index:05d}".encode("ascii") for index in range(count)],
+        dtype=np.bytes_,
+    )
 
 
 def build_joint_state_values(count: int) -> dict[str, object]:
@@ -113,10 +118,10 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     struct_message = build_struct_message(values)
     payload = idl_message.serialize()
 
-    xcdrjit_dict_bytes = bytes(serialize(values))
-    xcdrjit_struct_bytes = bytes(struct_message.serialize())
-    assert xcdrjit_dict_bytes == payload
-    assert xcdrjit_struct_bytes == payload
+    cydr_dict_bytes = bytes(serialize(values))
+    cydr_struct_bytes = bytes(struct_message.serialize())
+    assert cydr_dict_bytes == payload
+    assert cydr_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, JOINT_STATE_SCHEMA)
     assert_messages_equal(
         JointStateStruct.deserialize(payload)._to_nested_dict(),
@@ -130,8 +135,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: serialize(values),
-            "xcdrjit_struct": lambda: struct_message.serialize(),
+            "cydr_dict": lambda: serialize(values),
+            "cydr_struct": lambda: struct_message.serialize(),
             "cyclonedds_idl": idl_message.serialize,
         },
     )
@@ -140,8 +145,8 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "xcdrjit_dict": lambda: deserialize(payload),
-            "xcdrjit_struct": lambda: JointStateStruct.deserialize(payload),
+            "cydr_dict": lambda: deserialize(payload),
+            "cydr_struct": lambda: JointStateStruct.deserialize(payload),
             "cyclonedds_idl": lambda: JointState.deserialize(payload),
         },
     )
@@ -186,12 +191,12 @@ def main() -> int:
         "JointState Generated Codec Benchmark",
         [
             "Schema: JOINT_STATE_SCHEMA from bench/schema.py",
-            f"Cache dir: {CYTHON_CACHE_DIR}",
-            "Serialize: xcdrjit dict call is codec.serialize(values)",
-            "Serialize: xcdrjit struct call is message.serialize()",
+            f"Cache dir: {CYDR_CACHE_DIR}",
+            "Serialize: cydr dict call is codec.serialize(values)",
+            "Serialize: cydr struct call is message.serialize()",
             "Serialize: Cyclone call is idl_message.serialize()",
-            "Deserialize: xcdrjit dict call is codec.deserialize(payload)",
-            "Deserialize: xcdrjit struct call is JointStateStruct.deserialize(payload)",
+            "Deserialize: cydr dict call is codec.deserialize(payload)",
+            "Deserialize: cydr struct call is JointStateStruct.deserialize(payload)",
             "Deserialize: Cyclone call is JointState.deserialize(payload)",
             "Dict runtime input is one nested dict; struct runtime input is one XcdrStruct instance",
         ],

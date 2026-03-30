@@ -1,19 +1,17 @@
-"""Minimal end-to-end xcdrjit roundtrip example."""
+"""Minimal end-to-end cydr roundtrip example."""
 
 import os
 import time
 from pprint import pprint
+from typing import Any
 
 import numpy as np
+from nptyping import Bool, Bytes, Float64, NDArray
 
-from xcdrjit.idl import (
-    CYTHON_CACHE_DIR,
-    array,
-    boolean,
-    float64,
+from cydr.idl import (
+    CYDR_CACHE_DIR,
     get_codec_for,
     int32,
-    sequence,
     string,
     uint32,
     warmup_codec,
@@ -29,9 +27,9 @@ SCHEMA = {
         },
         "frame_id": string,
     },
-    "labels": sequence(string),
-    "position": sequence(float64),
-    "bools": array(boolean, ARR_SIZE),
+    "labels": NDArray[Any, Bytes],
+    "position": NDArray[Any, Float64],
+    "bools": NDArray[Any, Bool],
 }
 
 DEFAULT_VALUES = {
@@ -42,16 +40,16 @@ DEFAULT_VALUES = {
         },
         "frame_id": b"",
     },
-    "labels": [],
-    "position": np.array([], dtype=np.float64),
+    "labels": np.array([b"hello", b"world"], dtype=np.bytes_),
+    "position": np.array([1, 2, 3, 4], dtype=np.float64),
     "bools": np.zeros(ARR_SIZE, dtype=np.bool_),
 }
 
 
 def main() -> None:
     print("Compiling or loading schema...")
-    print(f"Cache dir: {CYTHON_CACHE_DIR}")
-    print("Override at process start with XCDRJIT_CACHE_DIR=/path/to/cache")
+    print(f"Cache dir: {CYDR_CACHE_DIR}")
+    print("Override at process start with CYDR_CACHE_DIR=/path/to/cache")
     codec = get_codec_for(SCHEMA)
     serialize = codec.serialize
     deserialize = codec.deserialize
@@ -66,7 +64,7 @@ def main() -> None:
             },
             "frame_id": b"map",
         },
-        "labels": [b"joint_a", b"joint_b"],
+        "labels": np.array([b"joint_a", b"joint_with_some_other_name"], dtype=np.bytes_),
         "position": np.array([1.0, 2.5], dtype=np.float64),
         "bools": np.arange(ARR_SIZE, dtype=np.int64) % 2 == 0,
     }
@@ -91,10 +89,10 @@ def main() -> None:
     print("Verifying...")
     is_stable = serialize(decoded) == payload
     print(f"Roundtrip stable: {is_stable}")
-    if "XCDRJIT_CACHE_DIR" in os.environ:
-        print(f"XCDRJIT_CACHE_DIR={os.environ['XCDRJIT_CACHE_DIR']}")
+    if "CYDR_CACHE_DIR" in os.environ:
+        print(f"CYDR_CACHE_DIR={os.environ['CYDR_CACHE_DIR']}")
     else:
-        print("XCDRJIT_CACHE_DIR is not set")
+        print("CYDR_CACHE_DIR is not set")
 
     print(f"Payload size: {len(payload):_} bytes")
     print(

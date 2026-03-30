@@ -1,7 +1,7 @@
 import pytest
 
-from xcdrjit import get_codec_for, int32
-from xcdrjit import _runtime
+from cydr import get_codec_for, int32
+from cydr import _runtime
 
 
 def test_get_codec_for_rejects_non_mapping_root_schema() -> None:

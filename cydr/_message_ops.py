@@ -1,14 +1,14 @@
-"""Private message helpers built around xcdrjit schemas."""
+"""Private message helpers built around cydr schemas."""
 
 from collections.abc import Mapping
 
 import numpy as np
 
 from .schema_types import (
-    ArrayType,
     FlatField,
     NestedSchemaFields,
-    SequenceType,
+    _is_ndarray_annotation,
+    _ndarray_element_type,
     float32,
     float64,
     normalize_field_schema,
@@ -99,32 +99,32 @@ def _assert_numpy_match(
         _fail_mismatch(path, "array values differ")
 
 
-def _assert_string_list_match(
+def _assert_string_collection_match(
     value_a: object,
     value_b: object,
     path: str,
 ) -> None:
-    """Assert that two string sequences are equal element-by-element.
+    """Assert that two decoded string collections contain the same bytes values."""
+    if isinstance(value_a, np.ndarray):
+        if value_a.ndim != 1:
+            _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
+        sequence_a = value_a.tolist()
+    elif isinstance(value_a, list):
+        sequence_a = value_a
+    else:
+        _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
 
-    Args:
-        value_a: First ``list[bytes]`` value.
-        value_b: Second ``list[bytes]`` value.
-        path: Dot-separated field path used in the assertion error message.
-    """
-    try:
-        length_a = len(value_a)
-        length_b = len(value_b)
-    except TypeError as exc:
-        raise AssertionError(
-            f"{_format_path(path)}: expected string sequences on both sides"
-        ) from exc
+    if isinstance(value_b, np.ndarray):
+        if value_b.ndim != 1:
+            _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
+        sequence_b = value_b.tolist()
+    elif isinstance(value_b, list):
+        sequence_b = value_b
+    else:
+        _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
 
-    if length_a != length_b:
-        _fail_mismatch(path, f"length {length_a} != {length_b}")
-
-    for index, (item_a, item_b) in enumerate(zip(value_a, value_b, strict=False)):
-        if item_a != item_b:
-            _fail_mismatch(f"{path}[{index}]", f"{item_a!r} != {item_b!r}")
+    if sequence_a != sequence_b:
+        _fail_mismatch(path, "string collection values differ")
 
 
 def _assert_field_match(
@@ -135,7 +135,7 @@ def _assert_field_match(
 ) -> None:
     """Assert that two leaf field values are equal under one flat field schema.
 
-    Dispatches to the appropriate scalar, NumPy, or string-list comparison.
+    Dispatches to the appropriate scalar or NumPy comparison.
 
     Args:
         value_a: First field value.
@@ -145,15 +145,15 @@ def _assert_field_match(
         path: Dot-separated field path used in the assertion error message.
     """
     normalized: FlatField = normalize_field_schema(field_schema)
-    if not isinstance(normalized, (ArrayType, SequenceType)):
+    if not _is_ndarray_annotation(normalized):
         _assert_scalar_match(value_a, value_b, normalized, path)
         return
 
-    if normalized.element_type is string:
-        _assert_string_list_match(value_a, value_b, path)
+    element_type = _ndarray_element_type(normalized)
+    if element_type is string:
+        _assert_string_collection_match(value_a, value_b, path)
         return
-
-    _assert_numpy_match(value_a, value_b, normalized.element_type, path)
+    _assert_numpy_match(value_a, value_b, element_type, path)
 
 
 def _assert_message_match(
@@ -206,7 +206,6 @@ def assert_messages_equal(
     """Assert that two runtime messages are equal under one schema.
 
     The comparison follows the schema order and ignores the runtime mapping keys.
-    Numeric and boolean arrays/sequences are compared with NumPy. String arrays
-    and sequences are compared element-by-element as ``bytes``.
+    Arrays and sequences are compared with NumPy.
     """
     _assert_message_match(msg_a, msg_b, schema, "")

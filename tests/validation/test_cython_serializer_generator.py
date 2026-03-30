@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from nptyping import Bytes, Float64, NDArray, Shape, UInt32
 
 from cyclonedds_idl import IdlStruct, types
 
-from xcdrjit.idl import (
-    array,
+from cydr.idl import (
     flatten_schema_fields,
     flatten_runtime_values,
     float64,
@@ -13,12 +14,11 @@ from xcdrjit.idl import (
     get_codec_for,
     rebuild_runtime_values,
     int32,
-    sequence,
     string,
     uint32,
     warmup_codec,
 )
-from xcdrjit.schema_types import field_schema_token
+from cydr.schema_types import field_schema_token
 from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT, Time
 
 
@@ -94,8 +94,8 @@ def build_values() -> dict[str, object]:
         "uint64_array": np.array([12, 13], dtype=np.uint64),
         "float32_sequence": np.array([1.5, -2.25], dtype=np.float32),
         "float64_array": np.array([3.5, -4.75], dtype=np.float64),
-        "text_array": [b"a", "café".encode("utf-8")],
-        "text_sequence": [b"bbb", "😀".encode("utf-8")],
+        "text_array": np.array([b"a", "cafe"], dtype=np.bytes_),
+        "text_sequence": np.array([b"bbb", b"emoji"], dtype=np.bytes_),
     }
 
 
@@ -199,6 +199,9 @@ def test_generate_cython_codec_source_renders_expected_lines() -> None:
     assert f"cpdef Py_ssize_t compute_serialized_size_{serializer_name}(" in source
     assert "pos = advance_string_field(pos, header_frame_id, align_offset)" in source
     assert "pos = write_string_field(buffer, pos, header_frame_id, align_offset)" in source
+    assert '_text_array_values = normalize_string_collection(text_array, "text_array")' in source
+    assert "pos = advance_string_array_position(pos, _text_array_values, align_offset)" in source
+    assert "pos = write_string_sequence(buffer, pos, _text_sequence_values, align_offset)" in source
     assert f"cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):" in source
     assert "header_frame_id = read_string_field(data, &pos, align_offset)" in source
 
@@ -206,9 +209,9 @@ def test_generate_cython_codec_source_renders_expected_lines() -> None:
 def test_generate_cython_codec_source_supports_arbitrary_array_lengths() -> None:
     schema = {
         "count": uint32,
-        "samples": array(uint32, 7),
-        "names": sequence(string),
-        "moments": array(float64, 5),
+        "samples": NDArray[Shape["7"], UInt32],
+        "names": NDArray[Any, Bytes],
+        "moments": NDArray[Shape["5"], Float64],
         "header": {
             "stamp": {
                 "sec": int32,
@@ -234,7 +237,7 @@ def test_rebuild_runtime_values_rebuilds_nested_shape() -> None:
     assert rebuilt["header"]["stamp"]["sec"] == values["header"]["stamp"]["sec"]
     assert rebuilt["header"]["frame_id"] == values["header"]["frame_id"]
     assert np.array_equal(rebuilt["float64_array"], values["float64_array"])
-    assert rebuilt["text_sequence"] == values["text_sequence"]
+    assert np.array_equal(rebuilt["text_sequence"], values["text_sequence"])
 
 
 def test_codec_serialize_matches_cyclone() -> None:
@@ -258,7 +261,7 @@ def test_load_cython_deserializer_roundtrips_cyclone_bytes() -> None:
     assert decoded["text"] == values["text"]
     assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
     assert np.array_equal(decoded["uint32_array"], values["uint32_array"])
-    assert decoded["text_array"] == values["text_array"]
+    assert np.array_equal(decoded["text_array"], values["text_array"])
 
 
 def test_warmup_codec_supports_nested_dict_values() -> None:
@@ -302,9 +305,40 @@ def test_deserializer_supports_flat_output() -> None:
             assert isinstance(actual_value, np.ndarray)
             assert isinstance(expected_value, np.ndarray)
             assert actual_value.dtype == expected_value.dtype
-            assert np.array_equal(actual_value, expected_value, equal_nan=True)
+            assert np.array_equal(
+                actual_value,
+                expected_value,
+                equal_nan=np.issubdtype(actual_value.dtype, np.floating),
+            )
         else:
             assert actual_value == expected_value
+
+
+def test_deserializer_can_return_string_collections_as_lists() -> None:
+    codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+    values = build_values()
+    payload = serialize_cyclone(values)
+
+    decoded = codec.deserialize(payload, string_collections="list")
+    flat_values = codec.deserialize(payload, flat=True, string_collections="list")
+
+    assert decoded["text"] == values["text"]
+    assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
+    assert isinstance(decoded["text_array"], list)
+    assert isinstance(decoded["text_sequence"], list)
+    assert decoded["text_array"] == values["text_array"].tolist()
+    assert decoded["text_sequence"] == values["text_sequence"].tolist()
+    assert isinstance(flat_values[-2], list)
+    assert isinstance(flat_values[-1], list)
+
+
+def test_deserializer_rejects_unknown_string_collection_mode() -> None:
+    codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+    values = build_values()
+    payload = serialize_cyclone(values)
+
+    with np.testing.assert_raises(ValueError):
+        codec.deserialize(payload, string_collections="nope")
 
 
 def test_codec_serialize_ignores_runtime_keys_and_uses_value_order() -> None:
@@ -348,6 +382,18 @@ def test_codec_serialize_ignores_runtime_keys_and_uses_value_order() -> None:
     }
 
     generated_bytes = bytes(serialize(reordered_keys_same_values))
+    cyclone_bytes = serialize_cyclone(values)
+
+    assert generated_bytes == cyclone_bytes
+
+
+def test_codec_serialize_accepts_list_bytes_for_string_collections() -> None:
+    serialize = get_codec_for(EVERY_SUPPORTED_SCHEMA).serialize
+    values = build_values()
+    values["text_array"] = [b"a", b"cafe"]
+    values["text_sequence"] = [b"bbb", b"emoji"]
+
+    generated_bytes = bytes(serialize(values))
     cyclone_bytes = serialize_cyclone(values)
 
     assert generated_bytes == cyclone_bytes

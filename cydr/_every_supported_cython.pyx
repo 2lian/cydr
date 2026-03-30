@@ -34,6 +34,30 @@ cnp.import_array()
 cdef int ENCAPSULATION_HEADER_SIZE = 4
 cdef int CDR_ALIGN_MAX = 8
 
+cdef inline list normalize_string_collection(
+    object values,
+    str field_name,
+):
+    cdef cnp.ndarray array_values
+
+    if isinstance(values, list):
+        return <list> values
+
+    if isinstance(values, np.ndarray):
+        array_values = values
+        if array_values.ndim != 1:
+            raise ValueError(f"{field_name} must be a 1D NumPy array or list[bytes].")
+        if array_values.dtype.kind != "S":
+            raise TypeError(
+                f"{field_name} must be a NumPy bytes_ array or list[bytes], got dtype {array_values.dtype!s}."
+            )
+        return values.tolist()
+
+    raise TypeError(
+        f"{field_name} must be a NumPy bytes_ array or list[bytes], got {type(values)!r}."
+    )
+
+
 # This prototype assumes the host machine is little-endian.
 
 
@@ -983,19 +1007,22 @@ cdef inline Py_ssize_t write_float64_sequence_field(
 cdef inline Py_ssize_t write_text_array_field(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept:
-    return write_string_array(buffer, pos, values, align_offset)
+) except -1:
+    cdef list string_values = normalize_string_collection(values, "text_array")
+    require_fixed_length(PyList_GET_SIZE(string_values), 2, "text_array")
+    return write_string_array(buffer, pos, string_values, align_offset)
 
 
 cdef inline Py_ssize_t write_text_sequence_field(
     unsigned char* buffer,
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept:
-    return write_string_sequence(buffer, pos, values, align_offset)
+) except -1:
+    cdef list string_values = normalize_string_collection(values, "text_sequence")
+    return write_string_sequence(buffer, pos, string_values, align_offset)
 
 
 cdef inline object read_bool_sequence_field(
@@ -1199,20 +1226,20 @@ cdef inline object read_float64_sequence_field(
     )
 
 
-cdef inline list read_text_array_field(
+cdef inline object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
-    return read_string_array_object(data, pos, 2, align_offset)
+    return np.asarray(read_string_array_object(data, pos, 2, align_offset), dtype=np.bytes_)
 
 
-cdef inline list read_text_sequence_field(
+cdef inline object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
-    return read_string_sequence_object(data, pos, align_offset)
+    return np.asarray(read_string_sequence_object(data, pos, align_offset), dtype=np.bytes_)
 
 
 cdef inline void require_fixed_length(
@@ -1443,19 +1470,21 @@ cdef inline Py_ssize_t advance_float64_sequence_field(
 
 cdef inline Py_ssize_t advance_text_array_field(
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
 ) except -1:
-    require_fixed_length(PyList_GET_SIZE(values), 2, "text_array")
-    return advance_string_array_position(pos, values, align_offset)
+    cdef list string_values = normalize_string_collection(values, "text_array")
+    require_fixed_length(PyList_GET_SIZE(string_values), 2, "text_array")
+    return advance_string_array_position(pos, string_values, align_offset)
 
 
 cdef inline Py_ssize_t advance_text_sequence_field(
     Py_ssize_t pos,
-    list values,
+    object values,
     Py_ssize_t align_offset,
-) noexcept:
-    return advance_string_sequence_position(pos, values, align_offset)
+) except -1:
+    cdef list string_values = normalize_string_collection(values, "text_sequence")
+    return advance_string_sequence_position(pos, string_values, align_offset)
 
 
 cpdef Py_ssize_t compute_serialized_size_every_supported_schema(
@@ -1487,8 +1516,8 @@ cpdef Py_ssize_t compute_serialized_size_every_supported_schema(
     const uint64_t[::1] uint64_array,
     const cnp.float32_t[::1] float32_sequence,
     const cnp.float64_t[::1] float64_array,
-    list text_array,
-    list text_sequence,
+    object text_array,
+    object text_sequence,
 ) except -1:
     cdef Py_ssize_t pos = ENCAPSULATION_HEADER_SIZE
     cdef Py_ssize_t align_offset = ENCAPSULATION_HEADER_SIZE
@@ -1556,8 +1585,8 @@ cpdef bytearray serialize_every_supported_schema(
     const uint64_t[::1] uint64_array,
     const cnp.float32_t[::1] float32_sequence,
     const cnp.float64_t[::1] float64_array,
-    list text_array,
-    list text_sequence,
+    object text_array,
+    object text_sequence,
 ):
     cdef Py_ssize_t total_size = compute_serialized_size_every_supported_schema(
         boolean_value,

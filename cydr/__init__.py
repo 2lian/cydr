@@ -1,11 +1,8 @@
-"""Public xcdrjit API."""
+"""Public cydr API."""
 from .idl import (
-    CYTHON_CACHE_DIR,
-    ArrayType,
+    CYDR_CACHE_DIR,
     Codec,
-    SequenceType,
     XcdrStruct,
-    array,
     assert_messages_equal,
     boolean,
     byte,
@@ -21,7 +18,6 @@ from .idl import (
     int64,
     rebuild_runtime_values,
     schema_hash,
-    sequence,
     string,
     uint8,
     uint16,
