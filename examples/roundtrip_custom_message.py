@@ -34,6 +34,19 @@ SCHEMA = {
     "bools": array(boolean, ARR_SIZE),
 }
 
+DEFAULT_VALUES = {
+    "header": {
+        "stamp": {
+            "sec": np.int32(0),
+            "nanosec": np.uint32(0),
+        },
+        "frame_id": b"",
+    },
+    "labels": [],
+    "position": np.array([], dtype=np.float64),
+    "bools": np.zeros(ARR_SIZE, dtype=np.bool_),
+}
+
 
 def main() -> None:
     print("Compiling or loading schema...")

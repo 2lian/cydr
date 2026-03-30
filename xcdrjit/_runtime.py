@@ -8,79 +8,32 @@ import shutil
 import sys
 import tempfile
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
-from typing import Protocol
 
 import numpy as np
 import pyximport
 
 from .cython_generator import (
-    generate_cython_serializer_module,
+    generate_cython_codec_module_source,
 )
 from .schema_types import (
     FlatField,
     NestedSchemaFields,
-    field_cache_token,
+    field_schema_token,
     flatten_schema_fields,
 )
-
-class ComputeSizeFunction(Protocol):
-    """Callable returned by ``get_codec_for(...).compute_size``."""
-
-    field_names: tuple[str, ...]
-    schema_hash: str
-    cache_dir: Path
-    module_name: str
-
-    def __call__(
-        self,
-        values: Mapping[str, object] | list[object] | tuple[object, ...],
-        /,
-    ) -> int: ...
-
-
-class SerializerFunction(Protocol):
-    """Callable returned by ``get_codec_for(...).serialize``."""
-
-    field_names: tuple[str, ...]
-    schema_hash: str
-    cache_dir: Path
-    module_name: str
-
-    def __call__(
-        self,
-        values: Mapping[str, object] | list[object] | tuple[object, ...],
-        /,
-    ) -> bytearray: ...
-
-
-class DeserializerFunction(Protocol):
-    """Callable returned by ``get_codec_for(...).deserialize``."""
-
-    field_names: tuple[str, ...]
-    schema_hash: str
-    cache_dir: Path
-    module_name: str
-
-    def __call__(
-        self,
-        data: object,
-        /,
-        *,
-        flat: bool = False,
-    ) -> dict[str, object] | tuple[object, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class Codec:
     """Compiled codec trio for one schema."""
 
-    compute_size: ComputeSizeFunction
-    serialize: SerializerFunction
-    deserialize: DeserializerFunction
+    compute_size: Callable
+    serialize: Callable
+    deserialize: Callable
     field_names: tuple[str, ...]
     schema_hash: str
     cache_dir: Path
@@ -89,7 +42,11 @@ class Codec:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedModuleInfo:
-    """Resolved generated codec module and its cache metadata."""
+    """Resolved generated codec module and its cache metadata.
+
+    Returned by ``_load_generated_codec`` and consumed immediately by
+    ``get_codec_for`` to build the public ``Codec``.
+    """
 
     module: object
     module_name: str
@@ -100,7 +57,7 @@ class GeneratedModuleInfo:
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
-_SCHEMA_HASH_VERSION = "xcdrjit-codegen-v4"
+_SCHEMA_HASH_VERSION = "xcdrjit-codegen-v5"
 _DEFAULT_CACHE_NAME = ".xcdrjit_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("XCDRJIT_CACHE_DIR")
@@ -112,7 +69,7 @@ _HELPER_BACKEND_FILES = (
 _SCHEMA_HASH_LENGTH = 32
 
 
-def _resolve_cython_cache_dir() -> Path:
+def _resolve_cache_dir() -> Path:
     """Resolve the cache directory used for generated codecs.
 
     Resolution order:
@@ -146,21 +103,21 @@ def _resolve_cython_cache_dir() -> Path:
         return _FALLBACK_CACHE_DIR
 
 
-CYTHON_CACHE_DIR = _resolve_cython_cache_dir()
+CYTHON_CACHE_DIR = _resolve_cache_dir()
 
 
-def schema_type_hash(schema: NestedSchemaFields) -> str:
+def schema_hash(schema: NestedSchemaFields) -> str:
     """Return a stable hash for the flattened schema type sequence."""
     flattened = flatten_schema_fields(schema)
     payload = (
         _SCHEMA_HASH_VERSION
         + "\0"
-        + "\0".join(field_cache_token(field_type) for field_type in flattened.values())
+        + "\0".join(field_schema_token(field_type) for field_type in flattened.values())
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:_SCHEMA_HASH_LENGTH]
 
 
-def flatten_cython_value_list(values: Mapping[str, object]) -> list[object]:
+def flatten_runtime_values(values: Mapping[str, object]) -> list[object]:
     """Flatten nested runtime values in insertion order and ignore keys.
 
     This mirrors the calling convention of the generated codecs: only the value
@@ -172,18 +129,31 @@ def flatten_cython_value_list(values: Mapping[str, object]) -> list[object]:
 
     for field_value in values.values():
         if isinstance(field_value, Mapping):
-            flattened.extend(flatten_cython_value_list(field_value))
+            flattened.extend(flatten_runtime_values(field_value))
         else:
             flattened.append(field_value)
 
     return flattened
 
 
-def inflate_cython_value_tree(
+def rebuild_runtime_values(
     schema: NestedSchemaFields,
     flat_values: list[object] | tuple[object, ...],
 ) -> dict[str, object]:
-    """Rebuild a nested value mapping from flat decoded values."""
+    """Rebuild a nested value mapping from flat decoded values.
+
+    Args:
+        schema: The original nested schema used to define the nesting shape.
+        flat_values: Flat sequence of decoded values in schema order, as
+            returned by the generated ``deserialize_<hash>`` function.
+
+    Returns:
+        A nested ``dict[str, object]`` matching the shape of ``schema``.
+
+    Raises:
+        ValueError: If ``flat_values`` has fewer or more elements than the
+            schema expects.
+    """
     remaining = iter(flat_values)
 
     def build(node: NestedSchemaFields) -> dict[str, object]:
@@ -207,16 +177,17 @@ def inflate_cython_value_tree(
     return rebuilt
 
 
-def _canonicalize_flattened_fields(
-    flattened_fields: dict[str, FlatField],
-) -> dict[str, FlatField]:
-    return {
-        f"arg_{index}": field_type
-        for index, field_type in enumerate(flattened_fields.values())
-    }
+def _ensure_shadow_backend_package(cache_dir: Path) -> None:
+    """Prepare the ``xcdrjit`` shadow package inside the cache directory.
 
+    Generated modules ``cimport`` from ``xcdrjit._every_supported_cython``.
+    To allow ``pyximport`` to resolve that import from ``cache_dir``, this
+    function creates a minimal ``xcdrjit/`` package there with the helper
+    ``.pyx`` and ``.pxd`` files linked or copied from the real package.
 
-def _ensure_shadow_package(cache_dir: Path) -> None:
+    Args:
+        cache_dir: The root cache directory where generated modules live.
+    """
     shadow_package_dir = cache_dir / "xcdrjit"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -249,85 +220,119 @@ def _ensure_shadow_package(cache_dir: Path) -> None:
         except OSError:
             shutil.copy2(source_path, target_path)
 
+def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
+    """Load a generated codec module from cache, compiling it first if needed.
 
-def _ensure_pyximport_ready() -> None:
-    global _PYXIMPORT_READY
-    if _PYXIMPORT_READY:
-        return
+    If a compiled ``.so`` already exists in ``cache_dir`` it is loaded
+    directly.  Otherwise the ``.pyx`` source is compiled via ``pyximport``.
 
-    pyximport.install(
-        language_level=3,
-        inplace=True,
-        setup_args={"include_dirs": np.get_include()},
-    )
-    _PYXIMPORT_READY = True
+    Before loading, the function checks whether ``xcdrjit._every_supported_cython``
+    is already imported from a path outside ``cache_dir`` (e.g. a stale
+    in-tree ``.so``).  If so, it evicts that entry so that pyximport will
+    compile and load the shadow-package version instead.
 
+    Args:
+        cache_dir: The directory that contains the generated ``.pyx`` source
+            and will receive the compiled ``.so``.
+        module_name: The importable module name, e.g. ``"schema_<hash>"``.
 
-def _find_compiled_module_path(cache_dir: Path, module_name: str) -> Path | None:
-    for suffix in EXTENSION_SUFFIXES:
-        matches = sorted(cache_dir.glob(f"{module_name}*{suffix}"))
-        if matches:
-            return matches[0]
-    return None
-
-
-def _load_compiled_module(module_name: str, compiled_path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, compiled_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(
-            f"Could not load compiled serializer module from {compiled_path}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _ensure_helper_backend_loaded(cache_dir: Path) -> None:
-    if "xcdrjit._every_supported_cython" in sys.modules:
-        return
-
-    _ensure_shadow_package(cache_dir)
-    _ensure_pyximport_ready()
-
-    sys.path.insert(0, str(cache_dir))
-    importlib.invalidate_caches()
-    try:
-        importlib.import_module("xcdrjit._every_supported_cython")
-    finally:
-        sys.path.remove(str(cache_dir))
-
-
-def _import_or_compile_generated_module(cache_dir: Path, module_name: str):
+    Returns:
+        The loaded module object.
+    """
     if module_name in sys.modules:
         return sys.modules[module_name]
 
-    _ensure_helper_backend_loaded(cache_dir)
+    helper_module = sys.modules.get("xcdrjit._every_supported_cython")
+    if helper_module is not None:
+        helper_path = getattr(helper_module, "__file__", None)
+        cache_helper_dir = (cache_dir / "xcdrjit").resolve()
+        if helper_path is None or not Path(helper_path).resolve().is_relative_to(cache_helper_dir):
+            sys.modules.pop("xcdrjit._every_supported_cython", None)
 
-    compiled_path = _find_compiled_module_path(cache_dir, module_name)
-    if compiled_path is not None:
-        return _load_compiled_module(module_name, compiled_path)
+    # First make the shared Cython backend importable from the cache.
+    if "xcdrjit._every_supported_cython" not in sys.modules:
+        _ensure_shadow_backend_package(cache_dir)
 
+        global _PYXIMPORT_READY
+        if not _PYXIMPORT_READY:
+            pyximport.install(
+                language_level=3,
+                inplace=True,
+                setup_args={"include_dirs": np.get_include()},
+            )
+            _PYXIMPORT_READY = True
+
+        sys.path.insert(0, str(cache_dir))
+        importlib.invalidate_caches()
+        try:
+            importlib.import_module("xcdrjit._every_supported_cython")
+        finally:
+            sys.path.remove(str(cache_dir))
+
+    # Reuse an already-compiled extension module when it exists.
+    for suffix in EXTENSION_SUFFIXES:
+        matches = sorted(cache_dir.glob(f"{module_name}*{suffix}"))
+        if not matches:
+            continue
+
+        compiled_path = matches[0]
+        spec = importlib.util.spec_from_file_location(module_name, compiled_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(
+                f"Could not load compiled serializer module from {compiled_path}"
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+        return module
+
+    # Otherwise import the generated .pyx and let pyximport compile it.
     sys.path.insert(0, str(cache_dir))
     importlib.invalidate_caches()
     try:
         return importlib.import_module(module_name)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
     finally:
         sys.path.remove(str(cache_dir))
 
 
-def _bind_schema_callable(
+def _wrap_schema_call(
     function,
     field_names: tuple[str, ...],
     kind: str,
     schema_hash_value: str,
     cache_dir: Path,
 ):
+    """Wrap a generated compute-size or serialize function for the public API.
+
+    The wrapper accepts either a nested dict-like mapping (values are
+    flattened in insertion order, keys ignored) or a flat list/tuple, then
+    forwards positional arguments to the underlying Cython function.
+
+    Args:
+        function: The generated Cython ``compute_serialized_size_<hash>`` or
+            ``serialize_<hash>`` function.
+        field_names: Tuple of flattened schema field names, used only for
+            arity checking and introspection.
+        kind: Human-readable label for error messages (``"compute_serialized_size"``
+            or ``"serialize"``).
+        schema_hash_value: The schema hash string, attached as an attribute.
+        cache_dir: The cache directory, attached as an attribute.
+
+    Returns:
+        A Python callable wrapping the generated compute-size or serialize function.
+    """
     expected_arg_count = len(field_names)
 
     def wrapper(values: Mapping[str, object] | list[object] | tuple[object, ...]):
         if isinstance(values, Mapping):
-            normalized_args = flatten_cython_value_list(values)
+            normalized_args = flatten_runtime_values(values)
         elif isinstance(values, (list, tuple)):
             normalized_args = values
         else:
@@ -356,13 +361,30 @@ def _bind_schema_callable(
     return wrapper
 
 
-def _bind_deserialize_callable(
+def _wrap_deserialize_call(
     function,
     schema: NestedSchemaFields,
     field_names: tuple[str, ...],
     schema_hash_value: str,
     cache_dir: Path,
 ):
+    """Wrap a generated deserialize function for the public API.
+
+    The wrapper calls the underlying Cython ``deserialize_<hash>`` function,
+    checks the returned flat tuple length, and either returns it directly
+    (``flat=True``) or rebuilds the nested dict via ``rebuild_runtime_values``.
+
+    Args:
+        function: The generated Cython ``deserialize_<hash>`` function.
+        schema: The original nested schema, used to rebuild the nested dict.
+        field_names: Tuple of flattened schema field names, used for arity
+            checking and introspection.
+        schema_hash_value: The schema hash string, attached as an attribute.
+        cache_dir: The cache directory, attached as an attribute.
+
+    Returns:
+        A Python callable wrapping the generated deserialize function.
+    """
     expected_arg_count = len(field_names)
 
     def wrapper(data, flat: bool = False):
@@ -374,7 +396,7 @@ def _bind_deserialize_callable(
             )
         if flat:
             return flat_values
-        return inflate_cython_value_tree(schema, flat_values)
+        return rebuild_runtime_values(schema, flat_values)
 
     wrapper.__name__ = "deserialize"
     wrapper.__doc__ = (
@@ -389,24 +411,39 @@ def _bind_deserialize_callable(
     return wrapper
 
 
-def _load_generated_schema_module(
+def _load_generated_codec(
     schema: NestedSchemaFields,
 ) -> GeneratedModuleInfo:
+    """Resolve, materialise, and load the generated codec module for a schema.
+
+    Flattens the schema, hashes the type sequence, writes the ``.pyx`` source
+    to the cache directory if it does not exist, then loads or compiles the
+    extension module.
+
+    Args:
+        schema: A nested schema mapping as accepted by ``get_codec_for``.
+
+    Returns:
+        A ``GeneratedModuleInfo`` with the loaded module and its metadata.
+    """
     resolved_cache_dir = CYTHON_CACHE_DIR
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
     flattened_fields = flatten_schema_fields(schema)
-    schema_hash_value = schema_type_hash(schema)
+    schema_hash_value = schema_hash(schema)
     module_name = f"schema_{schema_hash_value}"
     source_path = resolved_cache_dir / f"{module_name}.pyx"
 
     if not source_path.exists():
-        canonical_fields = _canonicalize_flattened_fields(flattened_fields)
-        source = generate_cython_serializer_module(module_name, canonical_fields)
+        canonical_fields = {
+            f"arg_{index}": field_type
+            for index, field_type in enumerate(flattened_fields.values())
+        }
+        source = generate_cython_codec_module_source(module_name, canonical_fields)
         source_path.write_text(source, encoding="utf-8")
 
     return GeneratedModuleInfo(
-        module=_import_or_compile_generated_module(resolved_cache_dir, module_name),
+        module=_load_or_compile_generated_module(resolved_cache_dir, module_name),
         module_name=module_name,
         flattened_fields=flattened_fields,
         schema_hash=schema_hash_value,
@@ -428,7 +465,7 @@ def get_codec_for(
     - ``codec.serialize(values)`` returns a ``bytearray`` containing the XCDR1 payload
     - ``codec.deserialize(data)`` returns a nested ``dict[str, object]``
     """
-    module_info = _load_generated_schema_module(schema)
+    module_info = _load_generated_codec(schema)
     compute_impl = getattr(
         module_info.module,
         f"compute_serialized_size_{module_info.module_name}",
@@ -440,21 +477,21 @@ def get_codec_for(
     )
     field_names = tuple(module_info.flattened_fields)
 
-    compute = _bind_schema_callable(
+    compute = _wrap_schema_call(
         compute_impl,
         field_names,
         "compute_serialized_size",
         module_info.schema_hash,
         module_info.cache_dir,
     )
-    serialize = _bind_schema_callable(
+    serialize = _wrap_schema_call(
         serialize_impl,
         field_names,
         "serialize",
         module_info.schema_hash,
         module_info.cache_dir,
     )
-    deserialize = _bind_deserialize_callable(
+    deserialize = _wrap_deserialize_call(
         deserialize_impl,
         schema,
         field_names,

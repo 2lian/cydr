@@ -6,7 +6,7 @@ import pytest
 from cyclonedds_idl import IdlStruct, types
 from xcdrjit.idl import (
     get_codec_for,
-    schema_type_hash,
+    schema_hash,
 )
 from ..cache import SCHEMA_CACHE_DIR
 from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA, Time
@@ -199,5 +199,5 @@ def test_generated_cython_module_compiles_from_tmp_dir_and_runs_once(
 
     cached_codec = get_codec_for(schema)
     assert bytes(cached_codec.serialize(values)) == generated_bytes
-    expected_hash = schema_type_hash(schema)
+    expected_hash = schema_hash(schema)
     assert (SCHEMA_CACHE_DIR / f"schema_{expected_hash}.pyx").exists()

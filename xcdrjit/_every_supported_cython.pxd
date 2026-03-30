@@ -78,32 +78,32 @@ cdef Py_ssize_t write_string_sequence(
     list values,
     Py_ssize_t align_offset,
 ) noexcept
-cdef tuple read_primitive_array_object(
+cdef object read_primitive_array_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
     Py_ssize_t align_offset,
     object dtype,
 )
-cdef tuple read_primitive_sequence_object(
+cdef object read_primitive_sequence_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
     Py_ssize_t align_offset,
     object dtype,
 )
-cdef tuple read_string_array_object(
+cdef list read_string_array_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t align_offset,
 )
-cdef tuple read_string_sequence_object(
+cdef list read_string_sequence_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
 
@@ -377,142 +377,142 @@ cdef Py_ssize_t write_text_sequence_field(
     Py_ssize_t align_offset,
 ) noexcept
 
-cdef tuple read_boolean_field(
+cdef object read_boolean_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
 )
-cdef tuple read_byte_field(
+cdef object read_byte_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int8_field(
+cdef object read_int8_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint8_field(
+cdef object read_uint8_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int16_field(
+cdef object read_int16_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint16_field(
+cdef object read_uint16_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int32_field(
+cdef object read_int32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint32_field(
+cdef object read_uint32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int64_field(
+cdef object read_int64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint64_field(
+cdef object read_uint64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_float32_field(
+cdef object read_float32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_float64_field(
+cdef object read_float64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_string_field(
+cdef bytes read_string_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_bool_sequence_field(
+cdef object read_bool_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_byte_array_field(
+cdef object read_byte_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int8_sequence_field(
+cdef object read_int8_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint8_array_field(
+cdef object read_uint8_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int16_sequence_field(
+cdef object read_int16_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint16_array_field(
+cdef object read_uint16_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int32_sequence_field(
+cdef object read_int32_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint32_array_field(
+cdef object read_uint32_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_int64_sequence_field(
+cdef object read_int64_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_uint64_array_field(
+cdef object read_uint64_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_float32_sequence_field(
+cdef object read_float32_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_float64_array_field(
+cdef object read_float64_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_float64_sequence_field(
+cdef object read_float64_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_text_array_field(
+cdef list read_text_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )
-cdef tuple read_text_sequence_field(
+cdef list read_text_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 )

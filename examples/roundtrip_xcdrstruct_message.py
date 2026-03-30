@@ -4,6 +4,7 @@ import os
 import time
 from pprint import pprint
 
+import msgspec
 import numpy as np
 
 from xcdrjit.idl import (
@@ -20,20 +21,24 @@ from xcdrjit.idl import (
 
 
 class Stamp(XcdrStruct):
-    sec: int32
-    nanosec: uint32
+    sec: int32 = np.int32(0)
+    nanosec: uint32 = np.uint32(0)
 
 
 class Header(XcdrStruct):
-    stamp: Stamp
-    frame_id: string
+    stamp: Stamp = msgspec.field(default_factory=Stamp)
+    frame_id: string = b""
 
 
 class JointStateLite(XcdrStruct):
-    header: Header
-    name: sequence(string)
-    position: sequence(float64)
-    effort: array(float64, 3)
+    header: Header = msgspec.field(default_factory=Header)
+    name: sequence(string) = msgspec.field(default_factory=list)
+    position: sequence(float64) = msgspec.field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+    effort: array(float64, 3) = msgspec.field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
 
 
 def main() -> None:

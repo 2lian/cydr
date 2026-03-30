@@ -11,14 +11,19 @@ from .schema_types import (
     FlatField,
     NestedSchemaFields,
     flatten_schema_fields,
-    normalize_schema_field,
+    normalize_field_schema,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class _SchemaState:
+class _SchemaInfo:
+    """Cached schema metadata for one ``XcdrStruct`` subclass.
+
+    Built once per class by ``_schema_info()`` and stored on the class.
+    """
+
     nested_structs_by_index: dict[int, type["XcdrStruct"]]
-    schema_dict: NestedSchemaFields
+    schema: NestedSchemaFields
     flat_schema: dict[str, FlatField]
 
 
@@ -36,12 +41,25 @@ class XcdrStruct(msgspec.Struct, gc=False):
     lower-level xcdrjit runtime.
     """
 
-    _xcdr_schema_state: ClassVar[_SchemaState | None] = None
+    _xcdr_schema_info: ClassVar[_SchemaInfo | None] = None
     _xcdr_codec: ClassVar[Codec | None] = None
 
     @classmethod
-    def _schema_state(cls) -> _SchemaState:
-        cached: _SchemaState | None = cls.__dict__.get("_xcdr_schema_state")
+    def _schema_info(cls) -> _SchemaInfo:
+        """Return the cached ``_SchemaInfo`` for this class, building it on first call.
+
+        Uses ``cls.__dict__`` directly (not attribute lookup) so that the
+        ``ClassVar`` default on the base class is not returned for subclasses
+        that have not yet built their own info.
+
+        Returns:
+            The ``_SchemaInfo`` for this struct class.
+
+        Raises:
+            TypeError: If any field annotation is not a supported schema token
+                or nested ``XcdrStruct`` subclass.
+        """
+        cached: _SchemaInfo | None = cls.__dict__.get("_xcdr_schema_info")
         if cached is not None:
             return cached
 
@@ -58,11 +76,11 @@ class XcdrStruct(msgspec.Struct, gc=False):
             )
             if nested_struct is not None:
                 nested_structs_by_index[index] = nested_struct
-                schema[field_name] = nested_struct._schema_state().schema_dict
+                schema[field_name] = nested_struct._schema_info().schema
                 continue
 
             try:
-                normalize_schema_field(annotation)
+                normalize_field_schema(annotation)
             except TypeError as exc:
                 raise TypeError(
                     f"{cls.__name__}.{field_name} uses unsupported annotation "
@@ -73,25 +91,20 @@ class XcdrStruct(msgspec.Struct, gc=False):
 
         flat_schema = flatten_schema_fields(schema)
 
-        cached = _SchemaState(
+        cached = _SchemaInfo(
             nested_structs_by_index=nested_structs_by_index,
-            schema_dict=schema,
+            schema=schema,
             flat_schema=flat_schema,
         )
-        cls._xcdr_schema_state = cached
+        cls._xcdr_schema_info = cached
         return cached
 
-    def _to_message_dict(self) -> dict[str, object]:
+    def _to_nested_dict(self) -> dict[str, object]:
         """Return the nested dict value representation of this message."""
         values = msgspec.structs.asdict(self)
-        nested_keys: list[str] = []
-
         for field_name, value in values.items():
             if isinstance(value, XcdrStruct):
-                nested_keys.append(field_name)
-
-        for field_name in nested_keys:
-            values[field_name] = values[field_name]._to_message_dict()
+                values[field_name] = value._to_nested_dict()
         return values
 
     def _to_flat(self) -> list[object]:
@@ -108,18 +121,18 @@ class XcdrStruct(msgspec.Struct, gc=False):
         return flattened
 
     @classmethod
-    def _from_flat_values(cls, values: list[object] | tuple[object, ...]) -> Self:
+    def _from_flat(cls, values: list[object] | tuple[object, ...]) -> Self:
         """Construct this struct from the flattened runtime value representation."""
-        state = cls._schema_state()
-        
+        schema_info = cls._schema_info()
+
         field_values = list(values) if not isinstance(values, list) else values
 
-        for index, nested_struct in state.nested_structs_by_index.items():
-            nested_width = len(nested_struct._schema_state().flat_schema)
+        for index, nested_struct in schema_info.nested_structs_by_index.items():
+            nested_width = len(nested_struct._schema_info().flat_schema)
             nested_values = field_values[index : index + nested_width]
 
             field_values[index : index + nested_width] = [
-                nested_struct._from_flat_values(nested_values)
+                nested_struct._from_flat(nested_values)
             ]
 
         if len(field_values) != len(cls.__struct_fields__):
@@ -130,15 +143,23 @@ class XcdrStruct(msgspec.Struct, gc=False):
         return cls(*field_values)
 
     @classmethod
-    def _from_message_dict(cls, values: Mapping[str, object]) -> Self:
-        """Construct this struct from the nested dict value representation."""
-        state = cls._schema_state()
+    def _from_nested_dict(cls, values: Mapping[str, object]) -> Self:
+        """Construct this struct from the nested dict value representation.
+
+        Args:
+            values: A nested ``dict``-like mapping matching the schema shape
+                of this struct.
+
+        Returns:
+            A new instance of this struct class.
+        """
+        schema_info = cls._schema_info()
         kwargs: dict[str, object] = {}
         for index, field_name in enumerate(cls.__struct_fields__):
-            nested_struct = state.nested_structs_by_index.get(index)
+            nested_struct = schema_info.nested_structs_by_index.get(index)
             value = values[field_name]
             if nested_struct is not None:
-                kwargs[field_name] = nested_struct._from_message_dict(value)
+                kwargs[field_name] = nested_struct._from_nested_dict(value)
             else:
                 kwargs[field_name] = value
         return cls(**kwargs)
@@ -151,7 +172,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
         if cached is not None:
             return cached
 
-        cached = get_codec_for(cls._schema_state().schema_dict)
+        cached = get_codec_for(cls._schema_info().schema)
         cls._xcdr_codec = cached
         return cached
 
@@ -162,4 +183,4 @@ class XcdrStruct(msgspec.Struct, gc=False):
     @classmethod
     def deserialize(cls, data: object) -> Self:
         """Deserialize one payload into this struct type."""
-        return cls._from_flat_values(cls._get_codec().deserialize(data, flat=True))
+        return cls._from_flat(cls._get_codec().deserialize(data, flat=True))

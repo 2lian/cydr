@@ -18,7 +18,7 @@ def test_get_codec_for_rejects_invalid_field_before_codegen(monkeypatch: pytest.
     def fail_codegen(*args, **kwargs):
         raise AssertionError("codegen should not run for an invalid schema")
 
-    monkeypatch.setattr(_runtime, "generate_cython_serializer_module", fail_codegen)
+    monkeypatch.setattr(_runtime, "generate_cython_codec_module_source", fail_codegen)
 
     with pytest.raises(TypeError, match="Unsupported field schema value"):
         get_codec_for({"value": object()})

@@ -7,18 +7,18 @@ from cyclonedds_idl import IdlStruct, types
 from xcdrjit.idl import (
     array,
     flatten_schema_fields,
-    flatten_cython_value_list,
+    flatten_runtime_values,
     float64,
-    generate_cython_serializer_code,
+    generate_cython_codec_source,
     get_codec_for,
-    inflate_cython_value_tree,
+    rebuild_runtime_values,
     int32,
     sequence,
     string,
     uint32,
     warmup_codec,
 )
-from xcdrjit.schema_types import field_cache_token
+from xcdrjit.schema_types import field_schema_token
 from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT, Time
 
 
@@ -147,14 +147,14 @@ def test_flatten_schema_fields_flattens_nested_header_schema() -> None:
         "header_stamp_nanosec",
         "header_frame_id",
     ]
-    assert field_cache_token(flattened["header_stamp_sec"]) == "int32"
-    assert field_cache_token(flattened["header_frame_id"]) == "string"
+    assert field_schema_token(flattened["header_stamp_sec"]) == "int32"
+    assert field_schema_token(flattened["header_frame_id"]) == "string"
 
 
-def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> None:
+def test_flatten_runtime_values_ignores_keys_and_preserves_value_order() -> None:
     values = build_values()
 
-    assert flatten_cython_value_list(values) == [
+    assert flatten_runtime_values(values) == [
         values["boolean_value"],
         values["byte_value"],
         values["signed_int8"],
@@ -188,22 +188,22 @@ def test_flatten_cython_value_list_ignores_keys_and_preserves_value_order() -> N
     ]
 
 
-def test_generate_cython_serializer_code_renders_expected_lines() -> None:
+def test_generate_cython_codec_source_renders_expected_lines() -> None:
     fields = flatten_schema_fields(EVERY_SUPPORTED_SCHEMA)
-    assert field_cache_token(fields["header_stamp_sec"]) == "int32"
-    assert field_cache_token(fields["header_frame_id"]) == "string"
+    assert field_schema_token(fields["header_stamp_sec"]) == "int32"
+    assert field_schema_token(fields["header_frame_id"]) == "string"
 
     serializer_name = "generated_every_supported_schema"
-    source = generate_cython_serializer_code(serializer_name, EVERY_SUPPORTED_SCHEMA)
+    source = generate_cython_codec_source(serializer_name, EVERY_SUPPORTED_SCHEMA)
 
     assert f"cpdef Py_ssize_t compute_serialized_size_{serializer_name}(" in source
     assert "pos = advance_string_field(pos, header_frame_id, align_offset)" in source
     assert "pos = write_string_field(buffer, pos, header_frame_id, align_offset)" in source
     assert f"cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):" in source
-    assert "header_frame_id, pos = read_string_field(data, pos, align_offset)" in source
+    assert "header_frame_id = read_string_field(data, &pos, align_offset)" in source
 
 
-def test_generate_cython_serializer_code_supports_arbitrary_array_lengths() -> None:
+def test_generate_cython_codec_source_supports_arbitrary_array_lengths() -> None:
     schema = {
         "count": uint32,
         "samples": array(uint32, 7),
@@ -217,18 +217,18 @@ def test_generate_cython_serializer_code_supports_arbitrary_array_lengths() -> N
         },
     }
 
-    source = generate_cython_serializer_code("generated_array_length_schema", schema)
+    source = generate_cython_codec_source("generated_array_length_schema", schema)
 
     assert 'require_fixed_length(samples.shape[0], 7, "samples")' in source
-    assert "read_primitive_array_object(data, pos, 7," in source
+    assert "read_primitive_array_object(data, &pos, 7," in source
     assert 'require_fixed_length(moments.shape[0], 5, "moments")' in source
 
 
-def test_inflate_cython_value_tree_rebuilds_nested_shape() -> None:
+def test_rebuild_runtime_values_rebuilds_nested_shape() -> None:
     values = build_values()
-    flat_values = flatten_cython_value_list(values)
+    flat_values = flatten_runtime_values(values)
 
-    rebuilt = inflate_cython_value_tree(EVERY_SUPPORTED_SCHEMA, flat_values)
+    rebuilt = rebuild_runtime_values(EVERY_SUPPORTED_SCHEMA, flat_values)
 
     assert rebuilt["text"] == values["text"]
     assert rebuilt["header"]["stamp"]["sec"] == values["header"]["stamp"]["sec"]
@@ -282,7 +282,7 @@ def test_serializer_accepts_flat_value_list() -> None:
     serialize = get_codec_for(EVERY_SUPPORTED_SCHEMA).serialize
     values = build_values()
 
-    generated_bytes = bytes(serialize(flatten_cython_value_list(values)))
+    generated_bytes = bytes(serialize(flatten_runtime_values(values)))
     cyclone_bytes = serialize_cyclone(values)
 
     assert generated_bytes == cyclone_bytes
@@ -294,7 +294,7 @@ def test_deserializer_supports_flat_output() -> None:
     payload = serialize_cyclone(values)
 
     flat_values = codec.deserialize(payload, flat=True)
-    expected_flat_values = flatten_cython_value_list(values)
+    expected_flat_values = flatten_runtime_values(values)
 
     assert len(flat_values) == len(expected_flat_values)
     for actual_value, expected_value in zip(flat_values, expected_flat_values, strict=True):

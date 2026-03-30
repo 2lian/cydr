@@ -1,9 +1,6 @@
 [build-system]
 requires = [
-    "setuptools>=69",
-    "wheel",
-    "Cython>=3.0,<4",
-    "numpy>=2.0,<3",
+    "setuptools>=68",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -38,8 +35,11 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["xcdrjit"]
 include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["xcdrjit", "xcdrjit.*"]
 
 [tool.setuptools.package-data]
 xcdrjit = ["*.pxd", "*.pyx", "py.typed"]

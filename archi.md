@@ -44,8 +44,8 @@ Current user-facing functions:
   - `sequence(element_type)`
 - `get_codec_for(schema)`
 - `flatten_schema_fields(schema)`
-- `flatten_cython_value_list(values)`
-- `inflate_cython_value_tree(schema, flat_values)`
+- `flatten_runtime_values(values)`
+- `rebuild_runtime_values(schema, flat_values)`
 
 The runtime convention is:
 

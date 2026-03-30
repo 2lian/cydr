@@ -105,22 +105,25 @@ cdef inline uint32_t read_uint32_raw_value(
     return value
 
 
-cdef inline tuple read_aligned_scalar_object(
+cdef inline object read_aligned_scalar_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
     Py_ssize_t align_offset,
     object dtype,
 ):
-    pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
-    require_available(data.shape[0], pos, itemsize)
-    return np.frombuffer(data, dtype=dtype, count=1, offset=pos)[0], pos + itemsize
+    cdef object value
+    pos[0] = align_position(pos[0], alignment, align_offset, CDR_ALIGN_MAX)
+    require_available(data.shape[0], pos[0], itemsize)
+    value = np.frombuffer(data, dtype=dtype, count=1, offset=pos[0])[0]
+    pos[0] += itemsize
+    return value
 
 
-cdef inline tuple read_primitive_array_object(
+cdef inline object read_primitive_array_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
@@ -128,28 +131,31 @@ cdef inline tuple read_primitive_array_object(
     object dtype,
 ):
     cdef Py_ssize_t byte_count = count * itemsize
+    cdef object value
     if count > 0:
-        pos = align_position(pos, alignment, align_offset, CDR_ALIGN_MAX)
-        require_available(data.shape[0], pos, byte_count)
+        pos[0] = align_position(pos[0], alignment, align_offset, CDR_ALIGN_MAX)
+        require_available(data.shape[0], pos[0], byte_count)
         # Keep numeric collections owned by the returned ndarray. A future
         # zero-copy experiment can switch this back to a Python memoryview
         # slice here, but the view semantics make payload lifetime more subtle.
-        return np.frombuffer(data, dtype=dtype, count=count, offset=pos).copy(), pos + byte_count
-    return np.empty(0, dtype=dtype), pos
+        value = np.frombuffer(data, dtype=dtype, count=count, offset=pos[0]).copy()
+        pos[0] += byte_count
+        return value
+    return np.empty(0, dtype=dtype)
 
 
-cdef inline tuple read_primitive_sequence_object(
+cdef inline object read_primitive_sequence_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
     Py_ssize_t align_offset,
     object dtype,
 ):
     cdef uint32_t count
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-    count = read_uint32_raw_value(data, pos)
-    pos += 4
+    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    count = read_uint32_raw_value(data, pos[0])
+    pos[0] += 4
     return read_primitive_array_object(
         data,
         pos,
@@ -161,63 +167,66 @@ cdef inline tuple read_primitive_sequence_object(
     )
 
 
-cdef inline tuple read_string_object(
+cdef inline bytes read_string_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     cdef uint32_t byte_count
     cdef Py_ssize_t string_size
+    cdef bytes value
 
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-    byte_count = read_uint32_raw_value(data, pos)
-    pos += 4
+    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    byte_count = read_uint32_raw_value(data, pos[0])
+    pos[0] += 4
 
     string_size = <Py_ssize_t> byte_count
     if string_size <= 0:
         raise ValueError("Invalid CDR string length.")
 
-    require_available(data.shape[0], pos, string_size)
-    if data[pos + string_size - 1] != 0:
+    require_available(data.shape[0], pos[0], string_size)
+    if data[pos[0] + string_size - 1] != 0:
         raise ValueError("CDR string is missing a trailing NUL byte.")
 
     # Return owned bytes, not a memoryview. For robotics-style workloads,
     # many short strings are common and copying is faster overall than
     # creating many Python memoryview slice objects. If we revisit large
     # scalar strings later, this is the place to try a zero-copy view again.
-    return PyBytes_FromStringAndSize(<char*> &data[pos], string_size - 1), pos + string_size
+    value = PyBytes_FromStringAndSize(<char*> &data[pos[0]], string_size - 1)
+    pos[0] += string_size
+    return value
 
 
-cdef inline tuple read_string_array_object(
+cdef inline list read_string_array_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t align_offset,
 ):
     cdef Py_ssize_t index
-    cdef object value
+    cdef bytes value
     cdef list values = []
 
     for index in range(count):
         # Keep string arrays and sequences on the same bytes-copy path as
         # scalar strings. A shared base memoryview was still slower than
         # copying for the short-string arrays that matter most in ROS 2.
-        value, pos = read_string_object(data, pos, align_offset)
+        value = read_string_object(data, pos, align_offset)
         values.append(value)
 
-    return values, pos
+    return values
 
 
-cdef inline tuple read_string_sequence_object(
+cdef inline list read_string_sequence_object(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     cdef uint32_t count
 
-    pos = align_position(pos, 4, align_offset, CDR_ALIGN_MAX)
-    count = read_uint32_raw_value(data, pos)
-    pos += 4
+    pos[0] = align_position(pos[0], 4, align_offset, CDR_ALIGN_MAX)
+    count = read_uint32_raw_value(data, pos[0])
+    pos[0] += 4
 
     return read_string_array_object(data, pos, count, align_offset)
 
@@ -504,17 +513,20 @@ cdef inline Py_ssize_t write_string_field(
     return write_string(buffer, pos, value, align_offset)
 
 
-cdef inline tuple read_boolean_field(
+cdef inline object read_boolean_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
 ):
-    require_available(data.shape[0], pos, 1)
-    return bool(data[pos] != 0), pos + 1
+    cdef object value
+    require_available(data.shape[0], pos[0], 1)
+    value = bool(data[pos[0]] != 0)
+    pos[0] += 1
+    return value
 
 
-cdef inline tuple read_byte_field(
+cdef inline object read_byte_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -527,9 +539,9 @@ cdef inline tuple read_byte_field(
     )
 
 
-cdef inline tuple read_int8_field(
+cdef inline object read_int8_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -542,9 +554,9 @@ cdef inline tuple read_int8_field(
     )
 
 
-cdef inline tuple read_uint8_field(
+cdef inline object read_uint8_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -557,9 +569,9 @@ cdef inline tuple read_uint8_field(
     )
 
 
-cdef inline tuple read_int16_field(
+cdef inline object read_int16_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -572,9 +584,9 @@ cdef inline tuple read_int16_field(
     )
 
 
-cdef inline tuple read_uint16_field(
+cdef inline object read_uint16_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -587,9 +599,9 @@ cdef inline tuple read_uint16_field(
     )
 
 
-cdef inline tuple read_int32_field(
+cdef inline object read_int32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -602,9 +614,9 @@ cdef inline tuple read_int32_field(
     )
 
 
-cdef inline tuple read_uint32_field(
+cdef inline object read_uint32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -617,9 +629,9 @@ cdef inline tuple read_uint32_field(
     )
 
 
-cdef inline tuple read_int64_field(
+cdef inline object read_int64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -632,9 +644,9 @@ cdef inline tuple read_int64_field(
     )
 
 
-cdef inline tuple read_uint64_field(
+cdef inline object read_uint64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -647,9 +659,9 @@ cdef inline tuple read_uint64_field(
     )
 
 
-cdef inline tuple read_float32_field(
+cdef inline object read_float32_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -662,9 +674,9 @@ cdef inline tuple read_float32_field(
     )
 
 
-cdef inline tuple read_float64_field(
+cdef inline object read_float64_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_aligned_scalar_object(
@@ -677,9 +689,9 @@ cdef inline tuple read_float64_field(
     )
 
 
-cdef inline tuple read_string_field(
+cdef inline bytes read_string_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_string_object(data, pos, align_offset)
@@ -986,9 +998,9 @@ cdef inline Py_ssize_t write_text_sequence_field(
     return write_string_sequence(buffer, pos, values, align_offset)
 
 
-cdef inline tuple read_bool_sequence_field(
+cdef inline object read_bool_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1001,9 +1013,9 @@ cdef inline tuple read_bool_sequence_field(
     )
 
 
-cdef inline tuple read_byte_array_field(
+cdef inline object read_byte_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1017,9 +1029,9 @@ cdef inline tuple read_byte_array_field(
     )
 
 
-cdef inline tuple read_int8_sequence_field(
+cdef inline object read_int8_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1032,9 +1044,9 @@ cdef inline tuple read_int8_sequence_field(
     )
 
 
-cdef inline tuple read_uint8_array_field(
+cdef inline object read_uint8_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1048,9 +1060,9 @@ cdef inline tuple read_uint8_array_field(
     )
 
 
-cdef inline tuple read_int16_sequence_field(
+cdef inline object read_int16_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1063,9 +1075,9 @@ cdef inline tuple read_int16_sequence_field(
     )
 
 
-cdef inline tuple read_uint16_array_field(
+cdef inline object read_uint16_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1079,9 +1091,9 @@ cdef inline tuple read_uint16_array_field(
     )
 
 
-cdef inline tuple read_int32_sequence_field(
+cdef inline object read_int32_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1094,9 +1106,9 @@ cdef inline tuple read_int32_sequence_field(
     )
 
 
-cdef inline tuple read_uint32_array_field(
+cdef inline object read_uint32_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1110,9 +1122,9 @@ cdef inline tuple read_uint32_array_field(
     )
 
 
-cdef inline tuple read_int64_sequence_field(
+cdef inline object read_int64_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1125,9 +1137,9 @@ cdef inline tuple read_int64_sequence_field(
     )
 
 
-cdef inline tuple read_uint64_array_field(
+cdef inline object read_uint64_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1141,9 +1153,9 @@ cdef inline tuple read_uint64_array_field(
     )
 
 
-cdef inline tuple read_float32_sequence_field(
+cdef inline object read_float32_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1156,9 +1168,9 @@ cdef inline tuple read_float32_sequence_field(
     )
 
 
-cdef inline tuple read_float64_array_field(
+cdef inline object read_float64_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_array_object(
@@ -1172,9 +1184,9 @@ cdef inline tuple read_float64_array_field(
     )
 
 
-cdef inline tuple read_float64_sequence_field(
+cdef inline object read_float64_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_primitive_sequence_object(
@@ -1187,17 +1199,17 @@ cdef inline tuple read_float64_sequence_field(
     )
 
 
-cdef inline tuple read_text_array_field(
+cdef inline list read_text_array_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_string_array_object(data, pos, 2, align_offset)
 
 
-cdef inline tuple read_text_sequence_field(
+cdef inline list read_text_sequence_field(
     const unsigned char[::1] data,
-    Py_ssize_t pos,
+    Py_ssize_t* pos,
     Py_ssize_t align_offset,
 ):
     return read_string_sequence_object(data, pos, align_offset)
@@ -1654,36 +1666,36 @@ cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
     cdef object text_array
     cdef object text_sequence
 
-    boolean_value, pos = read_boolean_field(data, pos)
-    byte_value, pos = read_byte_field(data, pos, align_offset)
-    signed_int8, pos = read_int8_field(data, pos, align_offset)
-    unsigned_int8, pos = read_uint8_field(data, pos, align_offset)
-    signed_int16, pos = read_int16_field(data, pos, align_offset)
-    unsigned_int16, pos = read_uint16_field(data, pos, align_offset)
-    signed_int32, pos = read_int32_field(data, pos, align_offset)
-    unsigned_int32, pos = read_uint32_field(data, pos, align_offset)
-    signed_int64, pos = read_int64_field(data, pos, align_offset)
-    unsigned_int64, pos = read_uint64_field(data, pos, align_offset)
-    float32_value, pos = read_float32_field(data, pos, align_offset)
-    float64_value, pos = read_float64_field(data, pos, align_offset)
-    text, pos = read_string_field(data, pos, align_offset)
-    header_stamp_sec, pos = read_int32_field(data, pos, align_offset)
-    header_stamp_nanosec, pos = read_uint32_field(data, pos, align_offset)
-    header_frame_id, pos = read_string_field(data, pos, align_offset)
-    bool_sequence, pos = read_bool_sequence_field(data, pos, align_offset)
-    byte_array, pos = read_byte_array_field(data, pos, align_offset)
-    int8_sequence, pos = read_int8_sequence_field(data, pos, align_offset)
-    uint8_array, pos = read_uint8_array_field(data, pos, align_offset)
-    int16_sequence, pos = read_int16_sequence_field(data, pos, align_offset)
-    uint16_array, pos = read_uint16_array_field(data, pos, align_offset)
-    int32_sequence, pos = read_int32_sequence_field(data, pos, align_offset)
-    uint32_array, pos = read_uint32_array_field(data, pos, align_offset)
-    int64_sequence, pos = read_int64_sequence_field(data, pos, align_offset)
-    uint64_array, pos = read_uint64_array_field(data, pos, align_offset)
-    float32_sequence, pos = read_float32_sequence_field(data, pos, align_offset)
-    float64_array, pos = read_float64_array_field(data, pos, align_offset)
-    text_array, pos = read_text_array_field(data, pos, align_offset)
-    text_sequence, pos = read_text_sequence_field(data, pos, align_offset)
+    boolean_value = read_boolean_field(data, &pos)
+    byte_value = read_byte_field(data, &pos, align_offset)
+    signed_int8 = read_int8_field(data, &pos, align_offset)
+    unsigned_int8 = read_uint8_field(data, &pos, align_offset)
+    signed_int16 = read_int16_field(data, &pos, align_offset)
+    unsigned_int16 = read_uint16_field(data, &pos, align_offset)
+    signed_int32 = read_int32_field(data, &pos, align_offset)
+    unsigned_int32 = read_uint32_field(data, &pos, align_offset)
+    signed_int64 = read_int64_field(data, &pos, align_offset)
+    unsigned_int64 = read_uint64_field(data, &pos, align_offset)
+    float32_value = read_float32_field(data, &pos, align_offset)
+    float64_value = read_float64_field(data, &pos, align_offset)
+    text = read_string_field(data, &pos, align_offset)
+    header_stamp_sec = read_int32_field(data, &pos, align_offset)
+    header_stamp_nanosec = read_uint32_field(data, &pos, align_offset)
+    header_frame_id = read_string_field(data, &pos, align_offset)
+    bool_sequence = read_bool_sequence_field(data, &pos, align_offset)
+    byte_array = read_byte_array_field(data, &pos, align_offset)
+    int8_sequence = read_int8_sequence_field(data, &pos, align_offset)
+    uint8_array = read_uint8_array_field(data, &pos, align_offset)
+    int16_sequence = read_int16_sequence_field(data, &pos, align_offset)
+    uint16_array = read_uint16_array_field(data, &pos, align_offset)
+    int32_sequence = read_int32_sequence_field(data, &pos, align_offset)
+    uint32_array = read_uint32_array_field(data, &pos, align_offset)
+    int64_sequence = read_int64_sequence_field(data, &pos, align_offset)
+    uint64_array = read_uint64_array_field(data, &pos, align_offset)
+    float32_sequence = read_float32_sequence_field(data, &pos, align_offset)
+    float64_array = read_float64_array_field(data, &pos, align_offset)
+    text_array = read_text_array_field(data, &pos, align_offset)
+    text_sequence = read_text_sequence_field(data, &pos, align_offset)
     require_consumed(data, pos)
 
     return {

@@ -210,7 +210,7 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     assert xcdrjit_dict_bytes == payload
     assert xcdrjit_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, schema)
-    assert_messages_equal(struct_type.deserialize(payload)._to_message_dict(), values, schema)
+    assert_messages_equal(struct_type.deserialize(payload)._to_nested_dict(), values, schema)
     assert bytes(idl_type.deserialize(payload).serialize()) == payload
 
     serialize_case = BenchmarkCase(

@@ -261,7 +261,7 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     assert xcdrjit_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, EVERY_SUPPORTED_SCHEMA)
     assert_messages_equal(
-        EverySupportedMessage.deserialize(payload)._to_message_dict(),
+        EverySupportedMessage.deserialize(payload)._to_nested_dict(),
         values,
         EVERY_SUPPORTED_SCHEMA,
     )

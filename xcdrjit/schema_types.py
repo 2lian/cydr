@@ -75,29 +75,6 @@ class SequenceType:
     element_type: PrimitiveSchemaType
 
 
-def array(element_type: object, length: int) -> ArrayType:
-    """Return a fixed-size array schema descriptor.
-
-    ``element_type`` must be one of the exported primitive schema tokens.
-    ``length`` is exact, not a minimum.
-    """
-    if not isinstance(length, int) or length < 0:
-        raise ValueError("array length must be a non-negative integer.")
-    return ArrayType(
-        element_type=_primitive_type_from_public_type(element_type),
-        length=length,
-    )
-
-
-def sequence(element_type: object) -> SequenceType:
-    """Return a variable-size sequence schema descriptor.
-
-    ``element_type`` must be one of the exported primitive schema tokens.
-    """
-    return SequenceType(
-        element_type=_primitive_type_from_public_type(element_type),
-    )
-
 
 type FlatField = PrimitiveSchemaType | ArrayType | SequenceType
 type NestedSchemaFields = Mapping[
@@ -123,7 +100,7 @@ _TOKEN_BY_TYPE: dict[PrimitiveSchemaType, str] = {
 }
 
 
-def _primitive_type_from_public_type(element_type: type) -> PrimitiveSchemaType:
+def _normalize_primitive_type(element_type: type) -> PrimitiveSchemaType:
     """Validate and return one public primitive schema token.
 
     Args:
@@ -146,7 +123,7 @@ def _primitive_type_from_public_type(element_type: type) -> PrimitiveSchemaType:
     )
 
 
-def _token(element_type: PrimitiveSchemaType) -> str:
+def _primitive_token(element_type: PrimitiveSchemaType) -> str:
     """Return the stable internal token string for one primitive schema type.
 
     Args:
@@ -159,7 +136,7 @@ def _token(element_type: PrimitiveSchemaType) -> str:
     return _TOKEN_BY_TYPE[element_type]
 
 
-def field_cache_token(field_schema: FlatField) -> str:
+def field_schema_token(field_schema: FlatField) -> str:
     """Return the stable cache token for one flattened field schema.
 
     Args:
@@ -171,13 +148,13 @@ def field_cache_token(field_schema: FlatField) -> str:
         keys.
     """
     if isinstance(field_schema, ArrayType):
-        return f"array:{_token(field_schema.element_type)}:{field_schema.length}"
+        return f"array:{_primitive_token(field_schema.element_type)}:{field_schema.length}"
     if isinstance(field_schema, SequenceType):
-        return f"sequence:{_token(field_schema.element_type)}"
-    return _token(field_schema)
+        return f"sequence:{_primitive_token(field_schema.element_type)}"
+    return _primitive_token(field_schema)
 
 
-def normalize_schema_field(field_schema: object) -> FlatField:
+def normalize_field_schema(field_schema: object) -> FlatField:
     """Normalize one leaf schema value into one canonical field schema.
 
     Args:
@@ -196,17 +173,13 @@ def normalize_schema_field(field_schema: object) -> FlatField:
         TypeError: If ``field_schema`` is not a supported leaf schema value.
     """
     if isinstance(field_schema, ArrayType):
-        return ArrayType(
-            element_type=_primitive_type_from_public_type(field_schema.element_type),
-            length=field_schema.length,
-        )
+        _normalize_primitive_type(field_schema.element_type)
+        return field_schema
     if isinstance(field_schema, SequenceType):
-        return SequenceType(
-            element_type=_primitive_type_from_public_type(field_schema.element_type),
-        )
-    primitive_token = field_schema
-    if primitive_token in _TOKEN_BY_TYPE:
-        return _primitive_type_from_public_type(primitive_token)
+        _normalize_primitive_type(field_schema.element_type)
+        return field_schema
+    if field_schema in _TOKEN_BY_TYPE:
+        return field_schema
     raise TypeError(
         f"Unsupported field schema value: {field_schema!r}. "
         "Use a primitive type token, array(...), sequence(...), or a nested dict."
@@ -247,5 +220,5 @@ def flatten_schema_fields(
         if isinstance(field_value, Mapping):
             flattened.update(flatten_schema_fields(field_value, prefix=full_name))
         else:
-            flattened[full_name] = normalize_schema_field(field_value)
+            flattened[full_name] = normalize_field_schema(field_value)
     return flattened

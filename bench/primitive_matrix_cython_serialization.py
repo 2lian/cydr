@@ -282,7 +282,7 @@ def benchmark_case_spec(case: CaseSpec, repeat: int, min_time: float) -> CaseMea
     assert bytes(codec.serialize(values)) == payload
     assert bytes(struct_message.serialize()) == payload
     assert_messages_equal(codec.deserialize(payload), values, case.schema)
-    assert_messages_equal(case.struct_class.deserialize(payload)._to_message_dict(), values, case.schema)
+    assert_messages_equal(case.struct_class.deserialize(payload)._to_nested_dict(), values, case.schema)
     assert bytes(case.idl_class.deserialize(payload).serialize()) == payload
 
     serialize_functions = {

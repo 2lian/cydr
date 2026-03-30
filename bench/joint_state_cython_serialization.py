@@ -119,7 +119,7 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
     assert xcdrjit_struct_bytes == payload
     assert_messages_equal(deserialize(payload), values, JOINT_STATE_SCHEMA)
     assert_messages_equal(
-        JointStateStruct.deserialize(payload)._to_message_dict(),
+        JointStateStruct.deserialize(payload)._to_nested_dict(),
         values,
         JOINT_STATE_SCHEMA,
     )

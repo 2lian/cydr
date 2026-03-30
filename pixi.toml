@@ -26,3 +26,4 @@ msgspec = ">=0.20.0,<0.21"
 [pypi-dependencies]
 cyclonedds-idl = ">=0.1.0, <0.2"
 xcdrjit = { path = ".", editable = true }
+np2typing = ">=2.6.3, <3"
