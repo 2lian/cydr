@@ -2,11 +2,17 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Self, get_type_hints
+from typing import ClassVar, Optional, Self, get_type_hints
 
+from cydr._warmup import warmup_codec
 import msgspec
 
-from ._runtime import Codec, get_codec_for
+from ._runtime import (
+    DEFAULT_STRING_COLLECTION_MODE,
+    Codec,
+    StringCollectionMode,
+    get_codec_for,
+)
 from .schema_types import (
     FlatField,
     NestedSchemaFields,
@@ -182,15 +188,21 @@ class XcdrStruct(msgspec.Struct, gc=False):
 
     @classmethod
     def deserialize(
-        cls,
-        data: object,
-        string_collections: Literal["numpy"] | Literal["list"] = "numpy",
+        cls, data: object, string_collections: Optional[StringCollectionMode] = None
     ) -> Self:
         """Deserialize one payload into this struct type."""
         return cls._from_flat(
             cls._get_codec().deserialize(
                 data,
                 flat=True,
-                string_collections=string_collections,
+                string_collections=(
+                    string_collections
+                    if string_collections is not None
+                    else DEFAULT_STRING_COLLECTION_MODE
+                ),
             )
         )
+
+    @classmethod
+    def brew(cls):
+        warmup_codec(cls())

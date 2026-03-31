@@ -13,6 +13,10 @@ cimport numpy as cnp
 
 
 cdef int ENCAPSULATION_HEADER_SIZE
+cdef int STRING_COLLECTION_MODE_NUMPY
+cdef int STRING_COLLECTION_MODE_LIST
+cdef int STRING_COLLECTION_MODE_STRING_DTYPE
+cdef int STRING_COLLECTION_MODE_RAW
 
 cdef void validate_encapsulation_header(const unsigned char[::1] data) except *
 cdef void require_consumed(const unsigned char[::1] data, Py_ssize_t pos) except *
@@ -70,30 +74,59 @@ cdef Py_ssize_t write_string_sequence(
     Py_ssize_t pos,
     object values,
 ) except -1
-cdef object read_primitive_array_object(
+cdef cnp.ndarray read_primitive_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    object dtype,
+    int type_num,
 )
-cdef object read_primitive_sequence_object(
+cdef cnp.ndarray read_primitive_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
-    object dtype,
+    int type_num,
 )
-cdef list read_string_array_object(
+
+ctypedef struct DecodedStringSpans:
+    Py_ssize_t count
+    const unsigned char* base
+    Py_ssize_t* offsets
+    Py_ssize_t* sizes
+
+cdef class DecodedStringCollection:
+    cdef DecodedStringSpans spans
+    cdef object owner
+    cdef bytes value_at(self, Py_ssize_t index)
+    cdef void init(
+        self,
+        const unsigned char* base,
+        object owner,
+        Py_ssize_t count,
+    ) except *
+    cdef void set_item(
+        self,
+        Py_ssize_t index,
+        Py_ssize_t offset,
+        Py_ssize_t size,
+    ) noexcept
+    cpdef list to_list(self)
+    cpdef cnp.ndarray to_numpy(self)
+    cpdef cnp.ndarray to_numpy_string_dtype(self)
+    cpdef object to_final(self, int string_collection_mode)
+
+cdef DecodedStringCollection read_string_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
 )
-cdef list read_string_sequence_object(
+cdef DecodedStringCollection read_string_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 )
+cdef Py_ssize_t string_collection_length(object values) except -1
 
 cdef const void* bool_sequence_ptr(const cnp.npy_bool[::1] values) noexcept
 cdef const void* uint8_view_ptr(const uint8_t[::1] values) noexcept
@@ -430,8 +463,10 @@ cdef object read_float64_sequence_field(
 cdef object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
+    int string_collection_mode,
 )
 cdef object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
+    int string_collection_mode,
 )

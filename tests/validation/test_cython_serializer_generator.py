@@ -7,6 +7,7 @@ from nptyping import Bytes, Float64, NDArray, Shape, UInt32
 from cyclonedds_idl import IdlStruct, types
 
 from cydr.idl import (
+    StringCollectionMode,
     flatten_schema_fields,
     flatten_runtime_values,
     float64,
@@ -58,6 +59,20 @@ class EverySupportedSchema(IdlStruct, typename="test/msg/EverySupportedSchema"):
     float64_array: types.array[types.float64, 2] = field(default_factory=list)
     text_array: types.array[str, 2] = field(default_factory=list)
     text_sequence: types.sequence[str] = field(default_factory=list)
+
+
+def _normalized_string_sequence(value: object) -> list[str]:
+    if isinstance(value, np.ndarray):
+        assert value.ndim == 1
+        sequence = value.tolist()
+    else:
+        assert isinstance(value, list)
+        sequence = value
+    return [item.decode("utf-8") if isinstance(item, bytes) else item for item in sequence]
+
+
+def _assert_string_collection_equal(actual: object, expected: object) -> None:
+    assert _normalized_string_sequence(actual) == _normalized_string_sequence(expected)
 
 
 def build_values() -> dict[str, object]:
@@ -203,9 +218,11 @@ def test_generate_cython_codec_source_renders_expected_lines() -> None:
     assert "normalize_string_collection" not in source
     assert "pos = advance_string_array_position(pos, text_array)" in source
     assert "pos = write_string_sequence(payload, pos, text_sequence)" in source
-    assert f"cpdef tuple deserialize_{serializer_name}(const unsigned char[::1] data):" in source
+    assert f"cpdef tuple deserialize_{serializer_name}(" in source
+    assert "int string_collection_mode=STRING_COLLECTION_MODE_NUMPY" in source
     assert "payload = data[ENCAPSULATION_HEADER_SIZE:]" in source
     assert "header_frame_id = read_string_field(payload, &pos)" in source
+    assert "text_sequence = read_string_sequence_object(payload, &pos).to_final(string_collection_mode)" in source
 
 
 def test_generate_cython_codec_source_supports_arbitrary_array_lengths() -> None:
@@ -263,7 +280,7 @@ def test_load_cython_deserializer_roundtrips_cyclone_bytes() -> None:
     assert decoded["text"] == values["text"]
     assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
     assert np.array_equal(decoded["uint32_array"], values["uint32_array"])
-    assert np.array_equal(decoded["text_array"], values["text_array"])
+    _assert_string_collection_equal(decoded["text_array"], values["text_array"])
 
 
 def test_warmup_codec_supports_nested_dict_values() -> None:
@@ -306,6 +323,9 @@ def test_deserializer_supports_flat_output() -> None:
         if isinstance(actual_value, np.ndarray) or isinstance(expected_value, np.ndarray):
             assert isinstance(actual_value, np.ndarray)
             assert isinstance(expected_value, np.ndarray)
+            if actual_value.dtype.kind in {"S", "T"} and expected_value.dtype.kind in {"S", "T"}:
+                _assert_string_collection_equal(actual_value, expected_value)
+                continue
             assert actual_value.dtype == expected_value.dtype
             assert np.array_equal(
                 actual_value,
@@ -321,8 +341,15 @@ def test_deserializer_can_return_string_collections_as_lists() -> None:
     values = build_values()
     payload = serialize_cyclone(values)
 
-    decoded = codec.deserialize(payload, string_collections="list")
-    flat_values = codec.deserialize(payload, flat=True, string_collections="list")
+    decoded = codec.deserialize(
+        payload,
+        string_collections=StringCollectionMode.LIST,
+    )
+    flat_values = codec.deserialize(
+        payload,
+        flat=True,
+        string_collections=StringCollectionMode.LIST,
+    )
 
     assert decoded["text"] == values["text"]
     assert decoded["header"]["frame_id"] == values["header"]["frame_id"]
@@ -334,13 +361,37 @@ def test_deserializer_can_return_string_collections_as_lists() -> None:
     assert isinstance(flat_values[-1], list)
 
 
-def test_deserializer_rejects_unknown_string_collection_mode() -> None:
+def test_deserializer_raw_string_collection_behaves_like_list() -> None:
     codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
     values = build_values()
     payload = serialize_cyclone(values)
 
-    with np.testing.assert_raises(ValueError):
-        codec.deserialize(payload, string_collections="nope")
+    decoded = codec.deserialize(
+        payload,
+        string_collections=StringCollectionMode.RAW,
+    )
+    text_array = decoded["text_array"]
+
+    assert len(text_array) == 2
+    assert text_array[0] == b"a"
+    assert text_array[-1] == b"cafe"
+    assert text_array[:] == [b"a", b"cafe"]
+    assert list(text_array) == [b"a", b"cafe"]
+    assert b"cafe" in text_array
+    assert text_array == [b"a", b"cafe"]
+
+
+def test_deserializer_accepts_string_collection_mode_enum_values() -> None:
+    codec = get_codec_for(EVERY_SUPPORTED_SCHEMA)
+    values = build_values()
+    payload = serialize_cyclone(values)
+
+    decoded = codec.deserialize(
+        payload,
+        string_collections=StringCollectionMode.NUMPY,
+    )
+
+    assert isinstance(decoded["text_array"], np.ndarray)
 
 
 def test_codec_serialize_ignores_runtime_keys_and_uses_value_order() -> None:

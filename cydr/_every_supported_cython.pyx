@@ -11,6 +11,7 @@ from cpython.bytes cimport (
     PyBytes_GET_SIZE,
 )
 from cpython.list cimport PyList_GET_ITEM, PyList_GET_SIZE
+from cpython.mem cimport PyMem_Free, PyMem_Malloc
 from libc.stdint cimport (
     int8_t,
     int16_t,
@@ -22,6 +23,7 @@ from libc.stdint cimport (
     uint64_t,
 )
 from libc.string cimport memcpy
+from libc.string cimport memset
 
 cdef extern from *:
     """
@@ -46,6 +48,16 @@ cdef extern from *:
                           const npy_packed_static_string*,
                           npy_static_string*)) PyArray_API[313])(a, p, u);
     }
+    static inline int _cydr_npy_string_pack(
+            npy_string_allocator* a,
+            npy_packed_static_string* p,
+            const char* buf,
+            size_t size) {
+        return (*(int (*)(npy_string_allocator*,
+                          npy_packed_static_string*,
+                          const char*,
+                          size_t)) PyArray_API[314])(a, p, buf, size);
+    }
     """
     size_t strnlen(const char* s, size_t maxlen) noexcept nogil
     cnp.npy_string_allocator* _cydr_acquire_allocator(
@@ -55,6 +67,11 @@ cdef extern from *:
         cnp.npy_string_allocator* a,
         const cnp.npy_packed_static_string* p,
         cnp.npy_static_string* u) noexcept
+    int _cydr_npy_string_pack(
+        cnp.npy_string_allocator* a,
+        cnp.npy_packed_static_string* p,
+        const char* buf,
+        size_t size) noexcept
 
 cimport cython
 cimport numpy as cnp
@@ -66,6 +83,206 @@ cnp.import_array()
 
 cdef int ENCAPSULATION_HEADER_SIZE = 4
 cdef int CDR_ALIGN_MAX = 8
+cdef int STRING_COLLECTION_MODE_NUMPY = 0
+cdef int STRING_COLLECTION_MODE_LIST = 1
+cdef int STRING_COLLECTION_MODE_STRING_DTYPE = 2
+cdef int STRING_COLLECTION_MODE_RAW = 3
+cdef object NUMPY_STRING_DTYPE = np.dtypes.StringDType()
+
+
+cdef class DecodedStringCollection:
+    def __cinit__(self):
+        self.spans.count = 0
+        self.spans.base = cython.NULL
+        self.spans.offsets = NULL
+        self.spans.sizes = NULL
+        self.owner = None
+
+    def __dealloc__(self):
+        if self.spans.offsets != NULL:
+            PyMem_Free(self.spans.offsets)
+        if self.spans.sizes != NULL:
+            PyMem_Free(self.spans.sizes)
+
+    cdef bytes value_at(self, Py_ssize_t index):
+        if index < 0:
+            index += self.spans.count
+        if index < 0 or index >= self.spans.count:
+            raise IndexError("DecodedStringCollection index out of range")
+        return PyBytes_FromStringAndSize(
+            <char*>(self.spans.base + self.spans.offsets[index]),
+            self.spans.sizes[index],
+        )
+
+    cdef void init(
+        self,
+        const unsigned char* base,
+        object owner,
+        Py_ssize_t count,
+    ) except *:
+        self.spans.count = count
+        self.spans.base = base
+        self.owner = owner
+        if count <= 0:
+            self.spans.offsets = NULL
+            self.spans.sizes = NULL
+            return
+
+        self.spans.offsets = <Py_ssize_t*>PyMem_Malloc(
+            count * cython.sizeof(Py_ssize_t)
+        )
+        if self.spans.offsets == NULL:
+            raise MemoryError()
+
+        self.spans.sizes = <Py_ssize_t*>PyMem_Malloc(
+            count * cython.sizeof(Py_ssize_t)
+        )
+        if self.spans.sizes == NULL:
+            PyMem_Free(self.spans.offsets)
+            self.spans.offsets = NULL
+            raise MemoryError()
+
+    cdef void set_item(
+        self,
+        Py_ssize_t index,
+        Py_ssize_t offset,
+        Py_ssize_t size,
+    ) noexcept:
+        self.spans.offsets[index] = offset
+        self.spans.sizes[index] = size
+
+    cpdef list to_list(self):
+        cdef Py_ssize_t index
+        cdef list values = []
+
+        for index in range(self.spans.count):
+            values.append(self.value_at(index))
+        return values
+
+    cpdef cnp.ndarray to_numpy(self):
+        cdef Py_ssize_t index
+        cdef Py_ssize_t max_len = 1
+        cdef Py_ssize_t itemsize
+        cdef cnp.ndarray values
+        cdef char* values_ptr
+
+        for index in range(self.spans.count):
+            if self.spans.sizes[index] > max_len:
+                max_len = self.spans.sizes[index]
+
+        itemsize = max_len
+        values = np.zeros(self.spans.count, dtype=f"S{itemsize}")
+        values_ptr = <char*>cnp.PyArray_DATA(values)
+
+        for index in range(self.spans.count):
+            memcpy(
+                values_ptr + index * itemsize,
+                self.spans.base + self.spans.offsets[index],
+                <size_t>self.spans.sizes[index],
+            )
+        return values
+
+    cpdef cnp.ndarray to_numpy_string_dtype(self):
+        cdef Py_ssize_t index
+        cdef cnp.ndarray values
+        cdef cnp.npy_packed_static_string* slot
+        cdef cnp.npy_string_allocator* alloc = NULL
+        cdef char* values_ptr
+        cdef Py_ssize_t itemsize
+
+        values = np.empty(self.spans.count, dtype=NUMPY_STRING_DTYPE)
+        itemsize = cnp.PyArray_ITEMSIZE(values)
+        values_ptr = <char*>cnp.PyArray_DATA(values)
+        alloc = _cydr_acquire_allocator(
+            <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(values)
+        )
+        if alloc == NULL:
+            raise MemoryError()
+
+        try:
+            for index in range(self.spans.count):
+                slot = <cnp.npy_packed_static_string*>(values_ptr + index * itemsize)
+                if _cydr_npy_string_pack(
+                    alloc,
+                    slot,
+                    <const char*>(self.spans.base + self.spans.offsets[index]),
+                    <size_t>self.spans.sizes[index],
+                ) == -1:
+                    raise RuntimeError("Failed to pack StringDType element")
+        finally:
+            _cydr_release_allocator(alloc)
+
+        return values
+
+    cpdef object to_final(self, int string_collection_mode):
+        if string_collection_mode == STRING_COLLECTION_MODE_NUMPY:
+            return self.to_numpy()
+        if string_collection_mode == STRING_COLLECTION_MODE_LIST:
+            return self.to_list()
+        if string_collection_mode == STRING_COLLECTION_MODE_STRING_DTYPE:
+            return self.to_numpy_string_dtype()
+        if string_collection_mode == STRING_COLLECTION_MODE_RAW:
+            return self
+        raise ValueError(
+            f"string_collection_mode must be one of "
+            f"{STRING_COLLECTION_MODE_NUMPY}, {STRING_COLLECTION_MODE_LIST}, "
+            f"{STRING_COLLECTION_MODE_STRING_DTYPE}, or {STRING_COLLECTION_MODE_RAW}; "
+            f"got {string_collection_mode!r}."
+        )
+
+    def __len__(self):
+        return self.spans.count
+
+    def __getitem__(self, index):
+        cdef Py_ssize_t start
+        cdef Py_ssize_t stop
+        cdef Py_ssize_t step
+        cdef Py_ssize_t current
+        cdef list values
+
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self.spans.count)
+            values = []
+            current = start
+            if step > 0:
+                while current < stop:
+                    values.append(self.value_at(current))
+                    current += step
+            else:
+                while current > stop:
+                    values.append(self.value_at(current))
+                    current += step
+            return values
+        return self.value_at(index)
+
+    def __iter__(self):
+        cdef Py_ssize_t index
+        for index in range(self.spans.count):
+            yield self.value_at(index)
+
+    def __contains__(self, value):
+        cdef Py_ssize_t index
+        cdef bytes candidate
+
+        for index in range(self.spans.count):
+            candidate = self.value_at(index)
+            if candidate == value:
+                return True
+        return False
+
+    def __repr__(self):
+        return repr(self.to_list())
+
+    def __eq__(self, other):
+        if isinstance(other, DecodedStringCollection):
+            return self.to_list() == other.to_list()
+        return self.to_list() == other
+
+    def __setitem__(self, index, value):
+        raise TypeError("DecodedStringCollection is read-only")
+
+    def __delitem__(self, index):
+        raise TypeError("DecodedStringCollection is read-only")
 
 cdef inline Py_ssize_t write_string_raw(
     unsigned char* buffer,
@@ -73,7 +290,7 @@ cdef inline Py_ssize_t write_string_raw(
     const char* data,
     Py_ssize_t size,
 ) noexcept:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     pos = write_uint32_raw(buffer, pos, <uint32_t>(size + 1))
     if size > 0:
         memcpy(buffer + pos, data, <size_t>size)
@@ -85,14 +302,14 @@ cdef inline Py_ssize_t advance_string_raw(
     Py_ssize_t pos,
     Py_ssize_t size,
 ) noexcept:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     return pos + 4 + size + 1
 
 
 # This prototype assumes the host machine is little-endian.
 
 
-cdef inline Py_ssize_t align_position(
+cdef inline Py_ssize_t round_up_to_alignment(
     Py_ssize_t pos,
     int alignment,
 ) noexcept:
@@ -156,45 +373,47 @@ cdef inline void read_aligned_value(
     Py_ssize_t itemsize,
     int alignment,
 ) except *:
-    pos[0] = align_position(pos[0], alignment)
+    pos[0] = round_up_to_alignment(pos[0], alignment)
     if pos[0] + itemsize > data.shape[0]:
         raise ValueError("Buffer too short while deserializing.")
     memcpy(out, data_ptr(data) + pos[0], <size_t>itemsize)
     pos[0] += itemsize
 
 
-cdef inline object read_primitive_array_object(
+cdef inline cnp.ndarray read_primitive_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
     Py_ssize_t itemsize,
     int alignment,
-    object dtype,
+    int type_num,
 ):
     cdef Py_ssize_t byte_count = count * itemsize
-    cdef object value
+    cdef cnp.npy_intp dims[1]
+    cdef cnp.ndarray value
+
     if count > 0:
-        pos[0] = align_position(pos[0], alignment)
+        pos[0] = round_up_to_alignment(pos[0], alignment)
         if pos[0] + byte_count > data.shape[0]:
             raise ValueError("Buffer too short while deserializing.")
-        # Keep numeric collections owned by the returned ndarray. A future
-        # zero-copy experiment can switch this back to a Python memoryview
-        # slice here, but the view semantics make payload lifetime more subtle.
-        value = np.frombuffer(data, dtype=dtype, count=count, offset=pos[0]).copy()
+
+    dims[0] = <cnp.npy_intp>count
+    value = cnp.PyArray_EMPTY(1, dims, type_num, 0)
+    if count > 0:
+        memcpy(cnp.PyArray_DATA(value), data_ptr(data) + pos[0], <size_t>byte_count)
         pos[0] += byte_count
-        return value
-    return np.empty(0, dtype=dtype)
+    return value
 
 
-cdef inline object read_primitive_sequence_object(
+cdef inline cnp.ndarray read_primitive_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t itemsize,
     int alignment,
-    object dtype,
+    int type_num,
 ):
     cdef uint32_t count
-    pos[0] = align_position(pos[0], 4)
+    pos[0] = round_up_to_alignment(pos[0], 4)
     count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
     return read_primitive_array_object(
@@ -203,7 +422,7 @@ cdef inline object read_primitive_sequence_object(
         count,
         itemsize,
         alignment,
-        dtype,
+        type_num,
     )
 
 
@@ -215,7 +434,7 @@ cdef inline bytes read_string_object(
     cdef Py_ssize_t string_size
     cdef bytes value
 
-    pos[0] = align_position(pos[0], 4)
+    pos[0] = round_up_to_alignment(pos[0], 4)
     byte_count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
 
@@ -237,36 +456,54 @@ cdef inline bytes read_string_object(
     return value
 
 
-cdef inline list read_string_array_object(
+cdef inline DecodedStringCollection read_string_array_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
     Py_ssize_t count,
 ):
     cdef Py_ssize_t index
-    cdef bytes value
-    cdef list values = []
+    cdef uint32_t byte_count
+    cdef Py_ssize_t string_size
+    cdef DecodedStringCollection values = DecodedStringCollection()
+
+    values.init(data_ptr(data), memoryview(data), count)
 
     for index in range(count):
-        # Keep string arrays and sequences on the same bytes-copy path as
-        # scalar strings. A shared base memoryview was still slower than
-        # copying for the short-string arrays that matter most in ROS 2.
-        value = read_string_object(data, pos)
-        values.append(value)
+        pos[0] = round_up_to_alignment(pos[0], 4)
+        byte_count = read_uint32_raw_value(data, pos[0])
+        pos[0] += 4
+
+        string_size = <Py_ssize_t>byte_count
+        if string_size <= 0:
+            raise ValueError("Invalid CDR string length.")
+        if pos[0] + string_size > data.shape[0]:
+            raise ValueError("Buffer too short while deserializing.")
+        if data[pos[0] + string_size - 1] != 0:
+            raise ValueError("CDR string is missing a trailing NUL byte.")
+
+        values.set_item(index, pos[0], string_size - 1)
+        pos[0] += string_size
 
     return values
 
 
-cdef inline list read_string_sequence_object(
+cdef inline DecodedStringCollection read_string_sequence_object(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
     cdef uint32_t count
 
-    pos[0] = align_position(pos[0], 4)
+    pos[0] = round_up_to_alignment(pos[0], 4)
     count = read_uint32_raw_value(data, pos[0])
     pos[0] += 4
 
     return read_string_array_object(data, pos, count)
+
+
+cdef inline Py_ssize_t string_collection_length(object values) except -1:
+    if type(values) is list:
+        return PyList_GET_SIZE(values)
+    return cnp.PyArray_DIM(<cnp.ndarray>values, 0)
 
 
 cdef inline Py_ssize_t bytes_size(bytes value) noexcept:
@@ -291,7 +528,7 @@ cdef inline Py_ssize_t write_aligned_value(
     Py_ssize_t byte_count,
     int alignment,
 ) noexcept:
-    pos = align_position(pos, alignment)
+    pos = round_up_to_alignment(pos, alignment)
     return write_raw_bytes(buffer, pos, data, byte_count)
 
 
@@ -330,7 +567,7 @@ cdef inline Py_ssize_t advance_primitive_array_position(
     int alignment,
 ) noexcept:
     if count > 0:
-        pos = align_position(pos, alignment)
+        pos = round_up_to_alignment(pos, alignment)
         pos += count * itemsize
     return pos
 
@@ -341,7 +578,7 @@ cdef inline Py_ssize_t advance_primitive_sequence_position(
     Py_ssize_t itemsize,
     int alignment,
 ) noexcept:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     pos += 4
     return advance_primitive_array_position(pos, count, itemsize, alignment)
 
@@ -356,7 +593,7 @@ cdef inline Py_ssize_t write_primitive_array(
 ) noexcept:
     cdef Py_ssize_t byte_count
     if count > 0:
-        pos = align_position(pos, alignment)
+        pos = round_up_to_alignment(pos, alignment)
         byte_count = count * itemsize
         pos = write_raw_bytes(buffer, pos, data, byte_count)
     return pos
@@ -370,7 +607,7 @@ cdef inline Py_ssize_t write_primitive_sequence(
     Py_ssize_t itemsize,
     int alignment,
 ) noexcept:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     pos = write_uint32_raw(buffer, pos, <uint32_t> count)
     return write_primitive_array(buffer, pos, data, count, itemsize, alignment)
 
@@ -381,6 +618,7 @@ cdef inline Py_ssize_t advance_string_array_position(
 ) except -1:
     cdef Py_ssize_t index, n, itemsize
     cdef cnp.ndarray arr
+    cdef cnp.dtype descr
     cdef const char* ptr
     cdef cnp.npy_static_string s
     cdef cnp.npy_packed_static_string* slot
@@ -396,8 +634,9 @@ cdef inline Py_ssize_t advance_string_array_position(
 
     arr = <cnp.ndarray>values
     n = arr.shape[0]
+    descr = <cnp.dtype>cnp.PyArray_DESCR(arr)
 
-    if arr.dtype.kind == 'S':
+    if descr.type_num == cnp.NPY_STRING:
         itemsize = cnp.PyArray_ITEMSIZE(arr)
         ptr = <const char*>cnp.PyArray_DATA(arr)
         for index in range(n):
@@ -405,6 +644,9 @@ cdef inline Py_ssize_t advance_string_array_position(
                 pos, strnlen(ptr + index * itemsize, <size_t>itemsize)
             )
         return pos
+
+    if descr.kind != c'T':
+        raise TypeError("Expected np.bytes_ or StringDType array for string collection.")
 
     # StringDType ('T')
     alloc = _cydr_acquire_allocator(
@@ -428,7 +670,7 @@ cdef inline Py_ssize_t advance_string_sequence_position(
     Py_ssize_t pos,
     object values,
 ) except -1:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     pos += 4
     return advance_string_array_position(pos, values)
 
@@ -440,6 +682,7 @@ cdef inline Py_ssize_t write_string_array(
 ) except -1:
     cdef Py_ssize_t index, n, itemsize
     cdef cnp.ndarray arr
+    cdef cnp.dtype descr
     cdef const char* ptr
     cdef cnp.npy_static_string s
     cdef cnp.npy_packed_static_string* slot
@@ -457,8 +700,9 @@ cdef inline Py_ssize_t write_string_array(
 
     arr = <cnp.ndarray>values
     n = arr.shape[0]
+    descr = <cnp.dtype>cnp.PyArray_DESCR(arr)
 
-    if arr.dtype.kind == 'S':
+    if descr.type_num == cnp.NPY_STRING:
         itemsize = cnp.PyArray_ITEMSIZE(arr)
         ptr = <const char*>cnp.PyArray_DATA(arr)
         for index in range(n):
@@ -468,6 +712,9 @@ cdef inline Py_ssize_t write_string_array(
                 strnlen(ptr + index * itemsize, <size_t>itemsize),
             )
         return pos
+
+    if descr.kind != c'T':
+        raise TypeError("Expected np.bytes_ or StringDType array for string collection.")
 
     # StringDType ('T')
     alloc = _cydr_acquire_allocator(
@@ -492,8 +739,8 @@ cdef inline Py_ssize_t write_string_sequence(
     Py_ssize_t pos,
     object values,
 ) except -1:
-    cdef Py_ssize_t count = len(values)
-    pos = align_position(pos, 4)
+    cdef Py_ssize_t count = string_collection_length(values)
+    pos = round_up_to_alignment(pos, 4)
     pos = write_uint32_raw(buffer, pos, <uint32_t>count)
     return write_string_array(buffer, pos, values)
 
@@ -981,7 +1228,7 @@ cdef inline Py_ssize_t write_text_array_field(
     Py_ssize_t pos,
     object values,
 ) except -1:
-    require_fixed_length(len(values), 2, "text_array")
+    require_fixed_length(string_collection_length(values), 2, "text_array")
     return write_string_array(buffer, pos, values)
 
 
@@ -993,7 +1240,7 @@ cdef inline Py_ssize_t write_text_sequence_field(
     return write_string_sequence(buffer, pos, values)
 
 
-cdef inline object read_bool_sequence_field(
+cdef inline cnp.ndarray read_bool_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1002,11 +1249,11 @@ cdef inline object read_bool_sequence_field(
         pos,
         cython.sizeof(cnp.npy_bool),
         1,
-        np.bool_,
+        cnp.NPY_BOOL,
     )
 
 
-cdef inline object read_byte_array_field(
+cdef inline cnp.ndarray read_byte_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1016,11 +1263,11 @@ cdef inline object read_byte_array_field(
         3,
         cython.sizeof(uint8_t),
         1,
-        np.uint8,
+        cnp.NPY_UINT8,
     )
 
 
-cdef inline object read_int8_sequence_field(
+cdef inline cnp.ndarray read_int8_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1029,11 +1276,11 @@ cdef inline object read_int8_sequence_field(
         pos,
         cython.sizeof(int8_t),
         1,
-        np.int8,
+        cnp.NPY_INT8,
     )
 
 
-cdef inline object read_uint8_array_field(
+cdef inline cnp.ndarray read_uint8_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1043,11 +1290,11 @@ cdef inline object read_uint8_array_field(
         3,
         cython.sizeof(uint8_t),
         1,
-        np.uint8,
+        cnp.NPY_UINT8,
     )
 
 
-cdef inline object read_int16_sequence_field(
+cdef inline cnp.ndarray read_int16_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1056,11 +1303,11 @@ cdef inline object read_int16_sequence_field(
         pos,
         cython.sizeof(int16_t),
         2,
-        np.int16,
+        cnp.NPY_INT16,
     )
 
 
-cdef inline object read_uint16_array_field(
+cdef inline cnp.ndarray read_uint16_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1070,11 +1317,11 @@ cdef inline object read_uint16_array_field(
         2,
         cython.sizeof(uint16_t),
         2,
-        np.uint16,
+        cnp.NPY_UINT16,
     )
 
 
-cdef inline object read_int32_sequence_field(
+cdef inline cnp.ndarray read_int32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1083,11 +1330,11 @@ cdef inline object read_int32_sequence_field(
         pos,
         cython.sizeof(int32_t),
         4,
-        np.int32,
+        cnp.NPY_INT32,
     )
 
 
-cdef inline object read_uint32_array_field(
+cdef inline cnp.ndarray read_uint32_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1097,11 +1344,11 @@ cdef inline object read_uint32_array_field(
         2,
         cython.sizeof(uint32_t),
         4,
-        np.uint32,
+        cnp.NPY_UINT32,
     )
 
 
-cdef inline object read_int64_sequence_field(
+cdef inline cnp.ndarray read_int64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1110,11 +1357,11 @@ cdef inline object read_int64_sequence_field(
         pos,
         cython.sizeof(int64_t),
         8,
-        np.int64,
+        cnp.NPY_INT64,
     )
 
 
-cdef inline object read_uint64_array_field(
+cdef inline cnp.ndarray read_uint64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1124,11 +1371,11 @@ cdef inline object read_uint64_array_field(
         2,
         cython.sizeof(uint64_t),
         8,
-        np.uint64,
+        cnp.NPY_UINT64,
     )
 
 
-cdef inline object read_float32_sequence_field(
+cdef inline cnp.ndarray read_float32_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1137,11 +1384,11 @@ cdef inline object read_float32_sequence_field(
         pos,
         cython.sizeof(cnp.float32_t),
         4,
-        np.float32,
+        cnp.NPY_FLOAT32,
     )
 
 
-cdef inline object read_float64_array_field(
+cdef inline cnp.ndarray read_float64_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1151,11 +1398,11 @@ cdef inline object read_float64_array_field(
         2,
         cython.sizeof(cnp.float64_t),
         8,
-        np.float64,
+        cnp.NPY_FLOAT64,
     )
 
 
-cdef inline object read_float64_sequence_field(
+cdef inline cnp.ndarray read_float64_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
 ):
@@ -1164,22 +1411,24 @@ cdef inline object read_float64_sequence_field(
         pos,
         cython.sizeof(cnp.float64_t),
         8,
-        np.float64,
+        cnp.NPY_FLOAT64,
     )
 
 
 cdef inline object read_text_array_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
+    int string_collection_mode,
 ):
-    return np.asarray(read_string_array_object(data, pos, 2), dtype=np.bytes_)
+    return read_string_array_object(data, pos, 2).to_final(string_collection_mode)
 
 
 cdef inline object read_text_sequence_field(
     const unsigned char[::1] data,
     Py_ssize_t* pos,
+    int string_collection_mode,
 ):
-    return np.asarray(read_string_sequence_object(data, pos), dtype=np.bytes_)
+    return read_string_sequence_object(data, pos).to_final(string_collection_mode)
 
 
 cdef inline void require_fixed_length(
@@ -1203,7 +1452,7 @@ cdef inline Py_ssize_t advance_string_field(
     Py_ssize_t pos,
     bytes value,
 ) noexcept:
-    pos = align_position(pos, 4)
+    pos = round_up_to_alignment(pos, 4)
     return pos + 4 + bytes_size(value) + 1
 
 
@@ -1386,7 +1635,7 @@ cdef inline Py_ssize_t advance_text_array_field(
     Py_ssize_t pos,
     object values,
 ) except -1:
-    require_fixed_length(len(values), 2, "text_array")
+    require_fixed_length(string_collection_length(values), 2, "text_array")
     return advance_string_array_position(pos, values)
 
 
@@ -1570,7 +1819,10 @@ cpdef bytearray serialize_every_supported_schema(
     return output
 
 
-cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
+cpdef dict deserialize_every_supported_schema(
+    const unsigned char[::1] data,
+    int string_collection_mode=STRING_COLLECTION_MODE_NUMPY,
+):
     cdef const unsigned char[::1] payload
     cdef Py_ssize_t pos = 0
     cdef bint boolean_value
@@ -1589,18 +1841,18 @@ cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
     cdef int32_t header_stamp_sec
     cdef uint32_t header_stamp_nanosec
     cdef bytes header_frame_id
-    cdef object bool_sequence
-    cdef object byte_array
-    cdef object int8_sequence
-    cdef object uint8_array
-    cdef object int16_sequence
-    cdef object uint16_array
-    cdef object int32_sequence
-    cdef object uint32_array
-    cdef object int64_sequence
-    cdef object uint64_array
-    cdef object float32_sequence
-    cdef object float64_array
+    cdef cnp.ndarray bool_sequence
+    cdef cnp.ndarray byte_array
+    cdef cnp.ndarray int8_sequence
+    cdef cnp.ndarray uint8_array
+    cdef cnp.ndarray int16_sequence
+    cdef cnp.ndarray uint16_array
+    cdef cnp.ndarray int32_sequence
+    cdef cnp.ndarray uint32_array
+    cdef cnp.ndarray int64_sequence
+    cdef cnp.ndarray uint64_array
+    cdef cnp.ndarray float32_sequence
+    cdef cnp.ndarray float64_array
     cdef object text_array
     cdef object text_sequence
 
@@ -1635,8 +1887,8 @@ cpdef dict deserialize_every_supported_schema(const unsigned char[::1] data):
     uint64_array = read_uint64_array_field(payload, &pos)
     float32_sequence = read_float32_sequence_field(payload, &pos)
     float64_array = read_float64_array_field(payload, &pos)
-    text_array = read_text_array_field(payload, &pos)
-    text_sequence = read_text_sequence_field(payload, &pos)
+    text_array = read_text_array_field(payload, &pos, string_collection_mode)
+    text_sequence = read_text_sequence_field(payload, &pos, string_collection_mode)
     require_consumed(payload, pos)
 
     return {

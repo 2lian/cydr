@@ -8,17 +8,6 @@ Priorities:
 2. Pythonic-style
 3. JIT compilation
 
-Supported types:
-- Primitive schema tokens:
-  - `boolean`, `byte`
-  - `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`
-  - `float32`, `float64`
-  - `string` (UTF-8)
-- collection schema annotations:
-  - `NDArray[Any, dtype]`
-  - `NDArray[Shape["n"], dtype]`
-- `get_codec_for(...)`
-
 Runnable examples:
 
 - [`examples/roundtrip_custom_message.py`](examples/roundtrip_custom_message.py) for the low-level nested-dict interface
@@ -31,7 +20,6 @@ Runnable examples:
 >
 > Current constraints:
 > - `string` fields are `bytes`, and string arrays / sequences are NumPy arrays with `np.bytes_` dtype
->   - `np.bytes_` dtype were introduced in `numpy>=2`. To not limit `numpy==1.*` users you can still serialize `list[bytes]` and deserialize using `deserialize(..., string_collections="list")`
 > - arrays and sequences must be 1D NumPy arrays with the matching dtype
 > - string collections are much slower than numeric arrays, and large arrays / sequences of strings should be avoided if speed matters. One long `string` entry is fine.
 >   - One `100 KB` `string` deserialized in about `2.83 us`, while `10,000` short strings totaling a similar byte volume took about `302.07 us`.
@@ -44,73 +32,91 @@ Runnable examples:
 
 `cydr` exists primarily to be faster than the general-purpose Python path while staying easy to call from Python.
 
-Latest local benchmark results against `cyclonedds_idl`:
+The latest local `JointState` benchmark results against `cyclonedds_idl`:
 
-| Benchmark | Case | `cydr` | `cyclonedds_idl` | Speedup |
-|---|---:|---:|---:|---:|
-| `JointState` | small | `2.51 us` | `15.40 us` | `6.14x` |
-| `JointState` | large | `66.54 us` | `9208.58 us` | `138.38x` |
-| `EverySupportedSchema` | small | `7.75 us` | `33.16 us` | `4.28x` |
-| `EverySupportedSchema` | large | `68.08 us` | `8969.99 us` | `131.77x` |
-| `FixedArray` | small | `2.42 us` | `9.88 us` | `4.09x` |
-| `FixedArray` | large | `6.94 us` | `445.33 us` | `64.14x` |
+Serialize
+
+| Case | Count | Bytes | Implementation | Median | Speedup |
+|---|---:|---:|---|---:|---:|
+| small | 8 | 372 | `cydr_dict` | `2.47 us` | `5.85x` |
+| small | 8 | 372 | `cydr_struct` | `2.35 us` | `6.17x` |
+| small | 8 | 372 | `cyclonedds_idl` | `14.12 us` | `1.00x` |
+| large | 10000 | 400052 | `cydr_dict` | `50.20 us` | `171.83x` |
+| large | 10000 | 400052 | `cydr_struct` | `57.09 us` | `151.44x` |
+| large | 10000 | 400052 | `cyclonedds_idl` | `8237.49 us` | `1.00x` |
+
+Deserialize
+
+| Case | Count | Bytes | Implementation | Median | Speedup |
+|---|---:|---:|---|---:|---:|
+| small | 8 | 372 | `cydr_dict` | `3.75 us` | `3.74x` |
+| small | 8 | 372 | `cydr_struct` | `3.06 us` | `4.50x` |
+| small | 8 | 372 | `cyclonedds_idl` | `13.42 us` | `1.00x` |
+| large | 10000 | 400052 | `cydr_dict` | `52.82 us` | `146.97x` |
+| large | 10000 | 400052 | `cydr_struct` | `50.95 us` | `150.39x` |
+| large | 10000 | 400052 | `cyclonedds_idl` | `7422.52 us` | `1.00x` |
 
 These numbers were produced with:
 
-- `pixi run bench-joint-state-cython -- --repeat 3 --min-time 0.05`
-- `pixi run bench-every-supported-cython -- --repeat 3 --min-time 0.05`
-- `pixi run bench-fixed-arrays-cython -- --repeat 3 --min-time 0.05`
+- `pixi run bench-joint-state-cython`
 
 ## Quick Start
 
 ```python
 from typing import Any
 
+import msgspec
 import numpy as np
 from nptyping import Bytes, Float64, NDArray
 
-from cydr.idl import (
-    get_codec_for,
-    int32,
-    string,
-    uint32,
+from cydr.idl import XcdrStruct
+from cydr.types import int32, string, uint32
+
+
+class Stamp(XcdrStruct):
+    sec: int32 = np.int32(0)
+    nanosec: uint32 = np.uint32(0)
+
+
+class Header(XcdrStruct):
+    stamp: Stamp = msgspec.field(default_factory=Stamp)
+    frame_id: string = b""
+
+
+class JointStateLite(XcdrStruct):
+    header: Header = msgspec.field(default_factory=Header)
+    name: NDArray[Any, Bytes] = msgspec.field(
+        default_factory=lambda: np.empty(0, dtype=np.bytes_)
+    )
+    position: NDArray[Any, Float64] = msgspec.field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+    velocity: NDArray[Any, Float64] = msgspec.field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+    effort: NDArray[Any, Float64] = msgspec.field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+
+JointStateLite.brew() # optional: forces caching and compilation of the schema
+
+message = JointStateLite(
+    header=Header(
+        stamp=Stamp(sec=np.int32(10), nanosec=np.uint32(123)),
+        frame_id=b"map",
+    ),
+    name=np.array([b"joint_a", b"joint_b"], dtype=np.bytes_),
+    position=np.array([1.0, 2.0], dtype=np.float64),
 )
 
-schema = {
-    "header": {
-        "stamp": {
-            "sec": int32,
-            "nanosec": uint32,
-        },
-        "frame_id": string,
-    },
-    "name": NDArray[Any, Bytes],
-    "position": NDArray[Any, Float64],
-}
-
-my_codec = get_codec_for(schema)
-my_serializer = my_codec.serialize
-my_deserializer = my_codec.deserialize
-
-values = {
-    "header": {
-        "stamp": {
-            "sec": 10,
-            "nanosec": 123,
-        },
-        "frame_id": b"map",
-    },
-    "name": np.array([b"joint_a", b"joint_b"], dtype=np.bytes_),
-    "position": np.array([1.0, 2.0], dtype=np.float64),
-}
-
-payload = my_serializer(values)
-decoded = my_deserializer(payload)
+payload = message.serialize()
+decoded = JointStateLite.deserialize(payload)
 ```
 
 ## Schema Types
+- **WIRE** -> **Python**
 
-- Scalar schema tokens are based on NumPy scalar dtypes:
+#### Primitive types
   - `boolean` -> `np.bool_`
   - `byte`, `uint8` -> `np.uint8`
   - `int8` -> `np.int8`
@@ -122,22 +128,20 @@ decoded = my_deserializer(payload)
   - `uint64` -> `np.uint64`
   - `float32` -> `np.float32`
   - `float64` -> `np.float64`
-- `string` is the exception: it maps to UTF-8 `bytes`, not a NumPy string dtype.
-- `NDArray[Any, dtype]` defines a variable-length 1D collection of one primitive dtype.
-- `NDArray[Shape["n"], dtype]` defines a fixed-length 1D collection of one primitive dtype.
+  - `string` -> UTF-8 `bytes`
 
-Runtime values:
-
-- scalar numeric and boolean fields can be plain Python scalars or NumPy scalars
-- numeric and boolean arrays/sequences should be 1D NumPy arrays with the matching dtype from the schema token
-- string fields are `bytes`
-- string arrays/sequences are NumPy arrays with `np.bytes_` dtype
+#### Collection types
+- `Sequence[Primitive]` -> `NDArray[Any, dtype]` defines a variable-length 1D collection of one primitive dtype.
+- `Array[n, Primitive]` -> `NDArray[Shape["n"], dtype]` defines a fixed-length 1D collection of one primitive dtype.
+- `Sequence[string]` -> `NDArray[Any, Bytes]` Represent a collection of strings with a numpy array of `np.bytes_` by default.
+  - When deserializing you can choose the representation using the Enum `StringCollectionMode`. `.LIST` mode (`list[bytes]`) is more performant from small arrays, or you can use the most performant `.RAW` mode, to manipulate a C wrapper directly. Numpy 2 `.STRING_DTYPE` mode (`StringDType`) is usually slower.
+  - When serializing, you can either pass `list[bytes]` or `array[np.bytes_]` or `array[np.StringDType]`
 
 ## Runtime Conventions
 
 - Keys are ignored when calling the (de)serializers.
-- Ordering of dictionary entries is critical and changes the schema.
-- Cached deserializers rebuild nested dicts using the original schema shape.
+- Ordering of schema entries is critical and changes the schema.
+- Deserializers rebuild messages using the schema shape provided at their creation.
 
 This means schema order and runtime value order must match.
 
@@ -152,45 +156,47 @@ Generated codecs are cached by the hash of the flattened field-type sequence.
 
 Test and benchmark schemas are defined next to those call sites instead of inside the library package.
 
+# Benchmarks per primitives
+
 | Primitive | Kind | Size | Count/Len | Payload Bytes | Dict Ser us | Struct Ser us | Cyclone Ser us | Dict Deser us | Struct Deser us | Cyclone Deser us |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `boolean` | `scalar` | `scalar` | 1 | 5 | 0.38 | 0.58 | 1.89 | 0.75 | 0.64 | 1.86 |
-| `boolean` | `array` | `small` | 16 | 20 | 0.57 | 0.77 | 2.29 | 1.61 | 1.62 | 2.10 |
-| `boolean` | `array` | `big` | 10000 | 10004 | 0.71 | 0.97 | 109.74 | 1.95 | 1.86 | 40.02 |
-| `byte` | `scalar` | `scalar` | 1 | 5 | 0.40 | 0.60 | 1.94 | 1.42 | 1.39 | 1.87 |
-| `byte` | `array` | `small` | 16 | 20 | 0.55 | 0.76 | 1.89 | 1.58 | 1.57 | 1.80 |
-| `byte` | `array` | `big` | 10000 | 10004 | 0.71 | 0.96 | 9.44 | 1.87 | 1.87 | 2.34 |
-| `int8` | `scalar` | `scalar` | 1 | 5 | 0.40 | 0.61 | 1.94 | 1.41 | 1.37 | 1.93 |
-| `int8` | `array` | `small` | 16 | 20 | 0.55 | 0.76 | 2.34 | 1.58 | 1.58 | 2.05 |
-| `int8` | `array` | `big` | 10000 | 10004 | 0.70 | 0.95 | 144.75 | 1.87 | 1.87 | 65.93 |
-| `uint8` | `scalar` | `scalar` | 1 | 5 | 0.40 | 0.68 | 2.19 | 1.53 | 1.27 | 1.91 |
-| `uint8` | `array` | `small` | 16 | 20 | 0.56 | 0.76 | 1.89 | 1.51 | 1.59 | 1.79 |
-| `uint8` | `array` | `big` | 10000 | 10004 | 0.71 | 1.12 | 10.93 | 2.16 | 2.14 | 2.71 |
-| `int16` | `scalar` | `scalar` | 1 | 6 | 0.46 | 0.68 | 2.21 | 1.61 | 1.57 | 1.82 |
-| `int16` | `array` | `small` | 16 | 36 | 0.55 | 0.76 | 2.35 | 1.56 | 1.59 | 2.11 |
-| `int16` | `array` | `big` | 10000 | 20004 | 0.87 | 1.19 | 156.92 | 2.06 | 2.05 | 84.50 |
-| `uint16` | `scalar` | `scalar` | 1 | 6 | 0.42 | 0.62 | 1.96 | 1.41 | 1.36 | 1.92 |
-| `uint16` | `array` | `small` | 16 | 36 | 0.56 | 0.76 | 2.36 | 1.59 | 1.58 | 2.04 |
-| `uint16` | `array` | `big` | 10000 | 20004 | 0.90 | 1.21 | 146.54 | 2.06 | 2.03 | 75.03 |
-| `int32` | `scalar` | `scalar` | 1 | 8 | 0.41 | 0.61 | 1.97 | 1.38 | 1.37 | 1.92 |
-| `int32` | `array` | `small` | 16 | 68 | 0.57 | 0.78 | 2.38 | 1.61 | 1.61 | 2.04 |
-| `int32` | `array` | `big` | 10000 | 40004 | 1.66 | 1.96 | 156.73 | 2.47 | 2.47 | 85.61 |
-| `uint32` | `scalar` | `scalar` | 1 | 8 | 0.41 | 0.61 | 1.98 | 1.35 | 1.39 | 1.99 |
-| `uint32` | `array` | `small` | 16 | 68 | 0.56 | 0.77 | 2.37 | 1.60 | 1.61 | 2.07 |
-| `uint32` | `array` | `big` | 10000 | 40004 | 1.68 | 1.96 | 151.57 | 2.36 | 2.39 | 92.83 |
-| `int64` | `scalar` | `scalar` | 1 | 12 | 0.41 | 0.64 | 2.24 | 1.54 | 1.58 | 2.18 |
-| `int64` | `array` | `small` | 16 | 132 | 0.63 | 0.87 | 2.67 | 1.82 | 1.81 | 2.30 |
-| `int64` | `array` | `big` | 10000 | 80004 | 3.22 | 3.08 | 153.14 | 3.03 | 2.97 | 87.25 |
-| `uint64` | `scalar` | `scalar` | 1 | 12 | 0.41 | 0.62 | 2.21 | 1.55 | 1.59 | 2.15 |
-| `uint64` | `array` | `small` | 16 | 132 | 0.63 | 0.87 | 2.69 | 1.81 | 1.82 | 2.35 |
-| `uint64` | `array` | `big` | 10000 | 80004 | 3.29 | 3.57 | 177.09 | 3.39 | 3.42 | 94.78 |
-| `float32` | `scalar` | `scalar` | 1 | 8 | 0.45 | 0.69 | 2.19 | 1.56 | 1.58 | 2.17 |
-| `float32` | `array` | `small` | 16 | 68 | 0.62 | 0.86 | 2.78 | 1.52 | 1.57 | 2.14 |
-| `float32` | `array` | `big` | 10000 | 40004 | 1.73 | 1.99 | 181.49 | 2.44 | 2.43 | 123.19 |
-| `float64` | `scalar` | `scalar` | 1 | 12 | 0.45 | 0.68 | 2.21 | 1.53 | 1.54 | 2.16 |
-| `float64` | `array` | `small` | 16 | 132 | 0.62 | 0.87 | 2.76 | 1.80 | 1.80 | 2.42 |
-| `float64` | `array` | `big` | 10000 | 80004 | 3.38 | 3.67 | 215.12 | 3.48 | 3.47 | 126.33 |
-| `string` | `scalar` | `small` | 16 | 25 | 0.45 | 0.68 | 2.68 | 0.77 | 0.73 | 2.51 |
-| `string` | `scalar` | `big` | 100000 | 100009 | 3.75 | 4.07 | 14.81 | 2.81 | 2.89 | 12.30 |
-| `string` | `array` | `small` | 16 | 257 | 0.62 | 0.88 | 13.25 | 1.39 | 1.33 | 11.78 |
-| `string` | `array` | `big` | 10000 | 160003 | 115.64 | 116.22 | 6960.46 | 314.88 | 313.95 | 6644.53 |
+| `boolean` | `scalar` | `scalar` | 1 | 5 | 0.47 | 0.71 | 2.46 | 0.95 | 0.80 | 2.38 |
+| `boolean` | `array` | `small` | 16 | 20 | 0.64 | 0.92 | 2.83 | 1.04 | 0.93 | 2.42 |
+| `boolean` | `array` | `big` | 250000 | 250004 | 8.81 | 9.14 | 3150.64 | 4.95 | 4.90 | 1694.94 |
+| `byte` | `scalar` | `scalar` | 1 | 5 | 0.42 | 0.65 | 2.09 | 0.79 | 0.72 | 2.01 |
+| `byte` | `array` | `small` | 16 | 20 | 0.57 | 0.81 | 1.97 | 0.91 | 0.82 | 1.87 |
+| `byte` | `array` | `big` | 250000 | 250004 | 7.71 | 8.01 | 192.27 | 5.10 | 5.07 | 16.16 |
+| `int8` | `scalar` | `scalar` | 1 | 5 | 0.43 | 0.65 | 2.09 | 0.81 | 0.73 | 2.04 |
+| `int8` | `array` | `small` | 16 | 20 | 0.57 | 0.81 | 2.52 | 0.87 | 0.82 | 2.11 |
+| `int8` | `array` | `big` | 250000 | 250004 | 7.80 | 8.10 | 5733.17 | 5.04 | 5.04 | 1960.90 |
+| `uint8` | `scalar` | `scalar` | 1 | 5 | 0.42 | 0.65 | 2.09 | 0.83 | 0.72 | 2.05 |
+| `uint8` | `array` | `small` | 16 | 20 | 0.57 | 0.81 | 1.97 | 0.91 | 0.76 | 1.88 |
+| `uint8` | `array` | `big` | 250000 | 250004 | 7.74 | 8.10 | 196.64 | 5.05 | 5.05 | 14.45 |
+| `int16` | `scalar` | `scalar` | 1 | 6 | 0.43 | 0.65 | 2.10 | 0.81 | 0.73 | 2.04 |
+| `int16` | `array` | `small` | 16 | 36 | 0.57 | 0.81 | 2.52 | 0.87 | 0.82 | 2.15 |
+| `int16` | `array` | `big` | 250000 | 500004 | 16.32 | 19.50 | 7527.46 | 11.66 | 11.75 | 2724.21 |
+| `uint16` | `scalar` | `scalar` | 1 | 6 | 0.49 | 0.77 | 2.43 | 0.94 | 0.84 | 2.33 |
+| `uint16` | `array` | `small` | 16 | 36 | 0.65 | 0.92 | 2.90 | 1.00 | 0.94 | 2.04 |
+| `uint16` | `array` | `big` | 250000 | 500004 | 15.39 | 15.80 | 6377.00 | 10.53 | 10.58 | 2712.14 |
+| `int32` | `scalar` | `scalar` | 1 | 8 | 0.43 | 0.67 | 2.11 | 0.75 | 0.73 | 2.33 |
+| `int32` | `array` | `small` | 16 | 68 | 0.57 | 0.81 | 2.89 | 0.97 | 0.80 | 2.13 |
+| `int32` | `array` | `big` | 250000 | 1000004 | 52.42 | 53.31 | 7638.93 | 38.43 | 38.22 | 3226.59 |
+| `uint32` | `scalar` | `scalar` | 1 | 8 | 0.49 | 0.76 | 2.43 | 0.86 | 0.83 | 2.06 |
+| `uint32` | `array` | `small` | 16 | 68 | 0.57 | 0.80 | 2.55 | 0.97 | 0.93 | 2.39 |
+| `uint32` | `array` | `big` | 250000 | 1000004 | 44.47 | 45.22 | 6612.07 | 31.17 | 31.51 | 3116.57 |
+| `int64` | `scalar` | `scalar` | 1 | 12 | 0.50 | 0.77 | 2.48 | 0.87 | 0.84 | 2.31 |
+| `int64` | `array` | `small` | 16 | 132 | 0.58 | 0.83 | 2.51 | 0.83 | 0.82 | 2.13 |
+| `int64` | `array` | `big` | 250000 | 2000004 | 107.15 | 107.91 | 6826.91 | 68.62 | 68.70 | 2958.38 |
+| `uint64` | `scalar` | `scalar` | 1 | 12 | 0.44 | 0.68 | 2.14 | 0.83 | 0.73 | 2.06 |
+| `uint64` | `array` | `small` | 16 | 132 | 0.57 | 0.81 | 2.50 | 0.83 | 0.82 | 2.21 |
+| `uint64` | `array` | `big` | 250000 | 2000004 | 107.62 | 108.43 | 6891.52 | 70.17 | 69.52 | 2920.62 |
+| `float32` | `scalar` | `scalar` | 1 | 8 | 0.43 | 0.66 | 2.10 | 0.80 | 0.83 | 2.32 |
+| `float32` | `array` | `small` | 16 | 68 | 0.66 | 0.93 | 2.98 | 0.97 | 0.95 | 2.63 |
+| `float32` | `array` | `big` | 250000 | 1000004 | 51.76 | 52.52 | 8315.61 | 39.41 | 39.31 | 3284.81 |
+| `float64` | `scalar` | `scalar` | 1 | 12 | 0.42 | 0.63 | 2.11 | 0.80 | 0.73 | 2.04 |
+| `float64` | `array` | `small` | 16 | 132 | 0.58 | 0.82 | 2.51 | 0.99 | 0.96 | 2.52 |
+| `float64` | `array` | `big` | 250000 | 2000004 | 108.85 | 110.48 | 7392.84 | 73.73 | 73.56 | 3404.89 |
+| `string` | `scalar` | `small` | 16 | 25 | 0.42 | 0.65 | 2.55 | 0.79 | 0.74 | 2.37 |
+| `string` | `scalar` | `big` | 10000 | 10009 | 0.56 | 0.84 | 3.94 | 0.89 | 0.87 | 3.59 |
+| `string` | `array` | `small` | 16 | 385 | 0.53 | 0.78 | 13.65 | 1.37 | 1.35 | 12.36 |
+| `string` | `array` | `big` | 250000 | 2502000001 | 981533.50 | 977211.97 | 4446380.86 | 338691.79 | 352686.02 | 1765052.79 |

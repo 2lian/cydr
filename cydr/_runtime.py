@@ -10,23 +10,20 @@ import tempfile
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import IntEnum
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
 import numpy as np
 import pyximport
+import pyximport.pyximport as pyximport_runtime
 
-from .cython_generator import (
-    generate_cython_codec_module_source,
-)
+from .cython_generator import generate_cython_codec_module_source
 from .schema_types import (
     FlatField,
     NestedSchemaFields,
-    _is_ndarray_annotation,
-    _ndarray_element_type,
     field_schema_token,
     flatten_schema_fields,
-    string,
 )
 
 
@@ -57,6 +54,17 @@ class GeneratedModuleInfo:
     schema_hash: str
     cache_dir: Path
 
+
+class StringCollectionMode(IntEnum):
+    """Container mode for decoded string collections."""
+
+    NUMPY = 0
+    LIST = 1
+    STRING_DTYPE = 2
+    RAW = 3
+
+
+DEFAULT_STRING_COLLECTION_MODE = StringCollectionMode.NUMPY
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
@@ -107,59 +115,6 @@ def _resolve_cache_dir() -> Path:
 
 
 CYDR_CACHE_DIR = _resolve_cache_dir()
-
-
-def _normalize_string_collection_mode(string_collections: str) -> str:
-    """Validate the requested runtime container for decoded string collections."""
-    if string_collections in {"numpy", "list"}:
-        return string_collections
-    raise ValueError(
-        f"string_collections must be 'numpy' or 'list', got {string_collections!r}."
-    )
-
-
-def _string_collection_field_indices(
-    flattened_fields: dict[str, FlatField],
-) -> tuple[int, ...]:
-    """Return the flat field indices that correspond to string collections."""
-    return tuple(
-        index
-        for index, field_schema in enumerate(flattened_fields.values())
-        if _is_ndarray_annotation(field_schema)
-        and _ndarray_element_type(field_schema) is string
-    )
-
-
-def _coerce_decoded_string_collection(
-    value: object,
-    string_collections: str,
-) -> object:
-    """Return one decoded string collection in the requested runtime container."""
-    if string_collections == "list":
-        return value.tolist() if isinstance(value, np.ndarray) else value
-    if isinstance(value, np.ndarray):
-        return value
-    return np.asarray(value, dtype=np.bytes_)
-
-
-def _coerce_flat_decoded_values(
-    flat_values: tuple[object, ...],
-    string_collection_indices: tuple[int, ...],
-    string_collections: str,
-) -> tuple[object, ...]:
-    """Return flat decoded values with string collections in the requested mode."""
-    if not string_collection_indices:
-        return flat_values
-    if string_collections == "list":
-        return flat_values
-
-    converted_values = list(flat_values)
-    for index in string_collection_indices:
-        converted_values[index] = _coerce_decoded_string_collection(
-            converted_values[index],
-            string_collections,
-        )
-    return tuple(converted_values)
 
 
 def schema_hash(schema: NestedSchemaFields) -> str:
@@ -233,7 +188,7 @@ def rebuild_runtime_values(
     return rebuilt
 
 
-def _ensure_shadow_backend_package(cache_dir: Path) -> None:
+def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
     """Prepare the ``cydr`` shadow package inside the cache directory.
 
     Generated modules ``cimport`` from ``cydr._every_supported_cython``.
@@ -243,6 +198,9 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> None:
 
     Args:
         cache_dir: The root cache directory where generated modules live.
+
+    Returns:
+        The shadow ``cydr`` package directory inside ``cache_dir``.
     """
     shadow_package_dir = cache_dir / "cydr"
 
@@ -276,6 +234,9 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> None:
         except OSError:
             shutil.copy2(source_path, target_path)
 
+    return shadow_package_dir
+
+
 def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
     """Load a generated codec module from cache, compiling it first if needed.
 
@@ -302,12 +263,17 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
     if helper_module is not None:
         helper_path = getattr(helper_module, "__file__", None)
         cache_helper_dir = (cache_dir / "cydr").resolve()
-        if helper_path is None or not Path(helper_path).resolve().is_relative_to(cache_helper_dir):
+        if helper_path is None or not Path(helper_path).resolve().is_relative_to(
+            cache_helper_dir
+        ):
             sys.modules.pop("cydr._every_supported_cython", None)
 
     # First make the shared Cython backend importable from the cache.
     if "cydr._every_supported_cython" not in sys.modules:
-        _ensure_shadow_backend_package(cache_dir)
+        shadow_package_dir = _ensure_shadow_backend_package(cache_dir)
+        helper_module_name = "cydr._every_supported_cython"
+        helper_source_path = shadow_package_dir / "_every_supported_cython.pyx"
+        helper_compiled_path = None
 
         global _PYXIMPORT_READY
         if not _PYXIMPORT_READY:
@@ -318,12 +284,40 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
             )
             _PYXIMPORT_READY = True
 
-        sys.path.insert(0, str(cache_dir))
-        importlib.invalidate_caches()
+        for suffix in EXTENSION_SUFFIXES:
+            matches = sorted(
+                shadow_package_dir.glob(f"_every_supported_cython*{suffix}")
+            )
+            if matches:
+                helper_compiled_path = matches[0]
+                break
+
+        if helper_compiled_path is None:
+            helper_compiled_path = Path(
+                pyximport_runtime.build_module(
+                    helper_module_name,
+                    str(helper_source_path),
+                    pyxbuild_dir=str(cache_dir / "_pyxbld"),
+                    inplace=True,
+                    language_level=3,
+                )
+            )
+
+        helper_spec = importlib.util.spec_from_file_location(
+            helper_module_name,
+            helper_compiled_path,
+        )
+        if helper_spec is None or helper_spec.loader is None:
+            raise ImportError(
+                f"Could not load compiled helper module from {helper_compiled_path}"
+            )
+        helper_module = importlib.util.module_from_spec(helper_spec)
+        sys.modules[helper_module_name] = helper_module
         try:
-            importlib.import_module("cydr._every_supported_cython")
-        finally:
-            sys.path.remove(str(cache_dir))
+            helper_spec.loader.exec_module(helper_module)
+        except Exception:
+            sys.modules.pop(helper_module_name, None)
+            raise
 
     # Reuse an already-compiled extension module when it exists.
     for suffix in EXTENSION_SUFFIXES:
@@ -420,7 +414,6 @@ def _wrap_schema_call(
 def _wrap_deserialize_call(
     function,
     schema: NestedSchemaFields,
-    flattened_fields: dict[str, FlatField],
     field_names: tuple[str, ...],
     schema_hash_value: str,
     cache_dir: Path,
@@ -428,8 +421,7 @@ def _wrap_deserialize_call(
     """Wrap a generated deserialize function for the public API.
 
     The wrapper calls the underlying Cython ``deserialize_<hash>`` function,
-    checks the returned flat tuple length, converts decoded string collections
-    to the requested runtime container, and either returns the flat values
+    checks the returned flat tuple length and either returns the flat values
     directly (``flat=True``) or rebuilds the nested dict via
     ``rebuild_runtime_values``.
 
@@ -445,29 +437,29 @@ def _wrap_deserialize_call(
         A Python callable wrapping the generated deserialize function.
     """
     expected_arg_count = len(field_names)
-    string_collection_indices = _string_collection_field_indices(flattened_fields)
 
-    def wrapper(data, flat: bool = False, string_collections: str = "numpy"):
-        flat_values = function(data)
+    def wrapper(
+        data,
+        flat: bool = False,
+        string_collections: StringCollectionMode = DEFAULT_STRING_COLLECTION_MODE,
+    ):
+        flat_values = function(data, int(string_collections))
         if len(flat_values) != expected_arg_count:
             raise ValueError(
                 f"deserialize expected {expected_arg_count} flattened values, "
                 f"got {len(flat_values)}."
             )
-        flat_values = _coerce_flat_decoded_values(
-            flat_values,
-            string_collection_indices,
-            _normalize_string_collection_mode(string_collections),
-        )
         if flat:
             return flat_values
-        return rebuild_runtime_values(schema, flat_values)
+        else:
+            return rebuild_runtime_values(schema, flat_values)
 
     wrapper.__name__ = "deserialize"
     wrapper.__doc__ = (
         f"deserialize for flattened fields {field_names}. "
         "Returns a nested dict by default, or the flat decoded value tuple when called with flat=True. "
-        "Use string_collections='numpy' or 'list' to choose the runtime container for decoded string collections."
+        "Use a StringCollectionMode value to choose the runtime container "
+        "for decoded string collections."
     )
     wrapper.field_names = field_names
     wrapper.schema_hash = schema_hash_value
@@ -530,7 +522,7 @@ def get_codec_for(
     - ``codec.compute_size(values)`` returns the serialized byte length
     - ``codec.serialize(values)`` returns a ``bytearray`` containing the XCDR1 payload
     - ``codec.deserialize(data)`` returns a nested ``dict[str, object]``
-    - ``codec.deserialize(data, string_collections="list")`` returns string collections as ``list[bytes]``
+    - ``codec.deserialize(data, string_collections=StringCollectionMode.LIST)`` returns string collections as ``list[bytes]``
     """
     module_info = _load_generated_codec(schema)
     compute_impl = getattr(
@@ -561,7 +553,6 @@ def get_codec_for(
     deserialize = _wrap_deserialize_call(
         deserialize_impl,
         schema,
-        module_info.flattened_fields,
         field_names,
         module_info.schema_hash,
         module_info.cache_dir,

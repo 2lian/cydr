@@ -4,7 +4,7 @@ Typical usage::
 
     from typing import Any
     from nptyping import Float64, NDArray
-    from cydr.idl import int32, uint32, string, get_codec_for
+    from cydr.idl import StringCollectionMode, int32, uint32, string, get_codec_for
 
     schema = {
         "header": {
@@ -16,7 +16,10 @@ Typical usage::
     codec = get_codec_for(schema)
     payload = codec.serialize(values)
     decoded = codec.deserialize(payload)
-    decoded_lists = codec.deserialize(payload, string_collections="list")
+    decoded_lists = codec.deserialize(
+        payload,
+        string_collections=StringCollectionMode.LIST,
+    )
 
 Runtime conventions:
 
@@ -24,7 +27,7 @@ Runtime conventions:
 - arrays and sequences are declared with ``nptyping.NDArray[...]``
 - numeric/boolean collections are 1-D NumPy arrays with the matching dtype
 - string collections are NumPy arrays with ``np.bytes_`` dtype
-- ``codec.deserialize(..., string_collections="list")`` returns string collections as ``list[bytes]`` instead
+- ``codec.deserialize(..., string_collections=StringCollectionMode.LIST)`` returns string collections as ``list[bytes]`` instead
 - mapping keys are ignored at (de)serialize time; only value order matters
 """
 
@@ -32,6 +35,7 @@ from ._message_ops import assert_messages_equal
 from ._runtime import (
     CYDR_CACHE_DIR,
     Codec,
+    StringCollectionMode,
     flatten_runtime_values,
     get_codec_for,
     rebuild_runtime_values,

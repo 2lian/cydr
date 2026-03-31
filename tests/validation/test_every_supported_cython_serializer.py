@@ -57,6 +57,20 @@ class EverySupportedSchema(IdlStruct, typename="test/msg/EverySupportedSchema"):
     text_sequence: types.sequence[str] = field(default_factory=list)
 
 
+def _normalized_string_sequence(value: object) -> list[str]:
+    if isinstance(value, np.ndarray):
+        assert value.ndim == 1
+        sequence = value.tolist()
+    else:
+        assert isinstance(value, list)
+        sequence = value
+    return [item.decode("utf-8") if isinstance(item, bytes) else item for item in sequence]
+
+
+def _assert_string_collection_equal(actual: object, expected: object) -> None:
+    assert _normalized_string_sequence(actual) == _normalized_string_sequence(expected)
+
+
 FIELD_ORDER = [
     "boolean_value",
     "byte_value",
@@ -246,6 +260,13 @@ def serialize_cyclone(values: dict[str, object]) -> bytes:
 
 
 def flatten_decoded(decoded: dict[str, object]) -> dict[str, object]:
+    text_array = decoded["text_array"]
+    text_sequence = decoded["text_sequence"]
+    if hasattr(text_array, "to_numpy"):
+        text_array = text_array.to_numpy()
+    if hasattr(text_sequence, "to_numpy"):
+        text_sequence = text_sequence.to_numpy()
+
     return {
         "boolean_value": decoded["boolean_value"],
         "byte_value": decoded["byte_value"],
@@ -275,8 +296,8 @@ def flatten_decoded(decoded: dict[str, object]) -> dict[str, object]:
         "uint64_array": decoded["uint64_array"],
         "float32_sequence": decoded["float32_sequence"],
         "float64_array": decoded["float64_array"],
-        "text_array": decoded["text_array"],
-        "text_sequence": decoded["text_sequence"],
+        "text_array": text_array,
+        "text_sequence": text_sequence,
     }
 
 
@@ -337,8 +358,8 @@ def test_deserialize_every_supported_schema_roundtrips_against_cyclone(build_val
     assert roundtrip_values["header_frame_id"] == values["header_frame_id"]
     assert np.array_equal(roundtrip_values["bool_sequence"], values["bool_sequence"])
     assert np.array_equal(roundtrip_values["float64_array"], values["float64_array"])
-    assert np.array_equal(roundtrip_values["text_array"], values["text_array"])
-    assert np.array_equal(roundtrip_values["text_sequence"], values["text_sequence"])
+    _assert_string_collection_equal(roundtrip_values["text_array"], values["text_array"])
+    _assert_string_collection_equal(roundtrip_values["text_sequence"], values["text_sequence"])
 
 
 def test_manual_serializer_accepts_list_bytes_for_string_collections() -> None:

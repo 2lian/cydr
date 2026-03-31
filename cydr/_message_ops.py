@@ -104,7 +104,7 @@ def _assert_string_collection_match(
     value_b: object,
     path: str,
 ) -> None:
-    """Assert that two decoded string collections contain the same bytes values."""
+    """Assert that two decoded string collections contain the same UTF-8 text."""
     if isinstance(value_a, np.ndarray):
         if value_a.ndim != 1:
             _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
@@ -112,7 +112,7 @@ def _assert_string_collection_match(
     elif isinstance(value_a, list):
         sequence_a = value_a
     else:
-        _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
+        sequence_a = value_a.to_list()
 
     if isinstance(value_b, np.ndarray):
         if value_b.ndim != 1:
@@ -121,9 +121,18 @@ def _assert_string_collection_match(
     elif isinstance(value_b, list):
         sequence_b = value_b
     else:
-        _fail_mismatch(path, "expected a 1D NumPy array or list[bytes]")
+        sequence_b = value_b.to_list()
 
-    if sequence_a != sequence_b:
+    normalized_a = [
+        item.decode("utf-8") if isinstance(item, bytes) else item
+        for item in sequence_a
+    ]
+    normalized_b = [
+        item.decode("utf-8") if isinstance(item, bytes) else item
+        for item in sequence_b
+    ]
+
+    if normalized_a != normalized_b:
         _fail_mismatch(path, "string collection values differ")
 
 

@@ -4,6 +4,7 @@ import numpy as np
 from nptyping import Bool, Bytes, Float32, Float64, Int8, Int16, Int32, Int64, NDArray, Shape, UInt8, UInt16, UInt32, UInt64
 
 from cydr.idl import (
+    StringCollectionMode,
     XcdrStruct,
     assert_messages_equal,
     boolean,
@@ -218,7 +219,7 @@ def test_cydr_struct_deserialize_can_return_list_string_collections() -> None:
 
     decoded = EverySupportedMessage.deserialize(
         message.serialize(),
-        string_collections="list",
+        string_collections=StringCollectionMode.LIST,
     )
 
     assert decoded.text == values["text"]

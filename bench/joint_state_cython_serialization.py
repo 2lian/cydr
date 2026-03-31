@@ -5,18 +5,24 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from cyclonedds_idl import IdlStruct, types
 from nptyping import Bytes, Float64, NDArray
 
-from cyclonedds_idl import IdlStruct, types
-
-from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
+from bench._common import (
+    BenchmarkCase,
+    benchmark_case,
+    print_environment,
+    print_results,
+)
 from bench.schema import JOINT_STATE_SCHEMA, Time
 from cydr import assert_messages_equal
+from cydr._runtime import StringCollectionMode
 from cydr.idl import CYDR_CACHE_DIR, XcdrStruct, get_codec_for, int32, string, uint32
-
 
 SMALL_SEQUENCE_LENGTH = 8
 LARGE_SEQUENCE_LENGTH = 10_000
+
+
 @dataclass
 class Header(IdlStruct, typename="std_msgs/msg/Header"):
     stamp: Time = field(default_factory=Time)
@@ -145,8 +151,13 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
         count=count,
         payload_size=len(payload),
         functions={
-            "cydr_dict": lambda: deserialize(payload),
-            "cydr_struct": lambda: JointStateStruct.deserialize(payload),
+            "cydr_dict": lambda: deserialize(
+                payload,
+                #string_collections=StringCollectionMode.RAW,
+            ),
+            "cydr_struct": lambda: JointStateStruct.deserialize(
+                payload, #string_collections=StringCollectionMode.RAW
+            ),
             "cyclonedds_idl": lambda: JointState.deserialize(payload),
         },
     )
@@ -155,7 +166,9 @@ def build_cases(label: str, count: int) -> tuple[BenchmarkCase, BenchmarkCase]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repeat", type=int, default=7, help="Number of timed repeats per serializer.")
+    parser.add_argument(
+        "--repeat", type=int, default=7, help="Number of timed repeats per serializer."
+    )
     parser.add_argument(
         "--min-time",
         type=float,
