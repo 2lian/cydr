@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Self, get_type_hints
 
-from cydr._warmup import warmup_codec
 import msgspec
 
 from ._runtime import (
@@ -205,4 +204,4 @@ class XcdrStruct(msgspec.Struct, gc=False):
 
     @classmethod
     def brew(cls):
-        warmup_codec(cls())
+        cls.deserialize(cls().serialize())
