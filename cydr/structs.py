@@ -115,11 +115,11 @@ class XcdrStruct(msgspec.Struct, gc=False):
     def _to_flat(self) -> list[object]:
         """Return the flattened runtime values in schema order."""
         flattened = list(msgspec.structs.astuple(self))
-        nested_indices: list[int] = []
+        nested_indices = self._schema_info().nested_structs_by_index.keys()
 
-        for index, value in enumerate(flattened):
-            if isinstance(value, XcdrStruct):
-                nested_indices.append(index)
+        # for index, value in enumerate(flattened):
+            # if isinstance(value, XcdrStruct):
+                # nested_indices.append(index)
 
         for index in reversed(nested_indices):
             flattened[index : index + 1] = flattened[index]._to_flat()
@@ -130,7 +130,7 @@ class XcdrStruct(msgspec.Struct, gc=False):
         """Construct this struct from the flattened runtime value representation."""
         schema_info = cls._schema_info()
 
-        field_values = list(values) if not isinstance(values, list) else values
+        field_values = list(values) if type(values) is not list else values
 
         for index, nested_struct in schema_info.nested_structs_by_index.items():
             nested_width = len(nested_struct._schema_info().flat_schema)
