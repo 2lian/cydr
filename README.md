@@ -83,10 +83,10 @@ class Header(XcdrStruct):
     frame_id: string = b""
 
 
-class JointStateLite(XcdrStruct):
+class JointState(XcdrStruct):
     header: Header = msgspec.field(default_factory=Header)
     name: NDArray[Any, Bytes] = msgspec.field(
-        default_factory=lambda: np.empty(0, dtype=np.bytes_)
+        default_factory=lambda: np.array([], dtype=np.bytes_)
     )
     position: NDArray[Any, Float64] = msgspec.field(
         default_factory=lambda: np.array([], dtype=np.float64)
@@ -98,9 +98,9 @@ class JointStateLite(XcdrStruct):
         default_factory=lambda: np.array([], dtype=np.float64)
     )
 
-JointStateLite.brew() # optional: forces caching and compilation of the schema
+JointState.brew() # optional: forces caching and compilation of the schema
 
-message = JointStateLite(
+message = JointState(
     header=Header(
         stamp=Stamp(sec=np.int32(10), nanosec=np.uint32(123)),
         frame_id=b"map",
@@ -110,7 +110,7 @@ message = JointStateLite(
 )
 
 payload = message.serialize()
-decoded = JointStateLite.deserialize(payload)
+decoded = JointState.deserialize(payload)
 ```
 
 ## Schema Types
