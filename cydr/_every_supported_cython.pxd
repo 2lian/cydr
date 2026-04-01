@@ -92,6 +92,7 @@ cdef cnp.ndarray read_primitive_sequence_object(
 
 ctypedef struct DecodedStringSpans:
     Py_ssize_t count
+    Py_ssize_t max_size
     const unsigned char* base
     Py_ssize_t* offsets
     Py_ssize_t* sizes

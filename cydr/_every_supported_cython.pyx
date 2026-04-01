@@ -22,6 +22,7 @@ from libc.stdint cimport (
     uint32_t,
     uint64_t,
 )
+from libc.stdio cimport snprintf
 from libc.string cimport memcpy
 from libc.string cimport memset
 
@@ -89,10 +90,10 @@ cdef int STRING_COLLECTION_MODE_STRING_DTYPE = 2
 cdef int STRING_COLLECTION_MODE_RAW = 3
 cdef object NUMPY_STRING_DTYPE = np.dtypes.StringDType()
 
-
 cdef class DecodedStringCollection:
     def __cinit__(self):
         self.spans.count = 0
+        self.spans.max_size = 0
         self.spans.base = cython.NULL
         self.spans.offsets = NULL
         self.spans.sizes = NULL
@@ -150,6 +151,8 @@ cdef class DecodedStringCollection:
     ) noexcept:
         self.spans.offsets[index] = offset
         self.spans.sizes[index] = size
+        if size > self.spans.max_size:
+            self.spans.max_size = size
 
     cpdef list to_list(self):
         cdef Py_ssize_t index
@@ -161,25 +164,32 @@ cdef class DecodedStringCollection:
 
     cpdef cnp.ndarray to_numpy(self):
         cdef Py_ssize_t index
-        cdef Py_ssize_t max_len = 1
         cdef Py_ssize_t itemsize
+        cdef Py_ssize_t sz
         cdef cnp.ndarray values
         cdef char* values_ptr
+        cdef char buf[32]
+        cdef int npdtype
 
-        for index in range(self.spans.count):
-            if self.spans.sizes[index] > max_len:
-                max_len = self.spans.sizes[index]
+        # max_size is maintained incrementally in set_item — no scan loop needed.
+        itemsize = self.spans.max_size if self.spans.max_size >= 1 else 1
 
-        itemsize = max_len
-        values = np.zeros(self.spans.count, dtype=f"S{itemsize}")
+        # Build "S<k>" on the C stack — same idea as C++ ("S"s + to_string(k)).
+        # Avoids the Python f-string entirely; np.empty handles the rest.
+        npdtype = snprintf(buf, 32, "S%d", <int>itemsize)
+        values = np.empty(self.spans.count, dtype=PyBytes_FromStringAndSize(buf, npdtype))
         values_ptr = <char*>cnp.PyArray_DATA(values)
+        memset(values_ptr, 0, <size_t>(itemsize * self.spans.count))
 
         for index in range(self.spans.count):
+            span = self.spans.sizes[index]
             memcpy(
                 values_ptr + index * itemsize,
                 self.spans.base + self.spans.offsets[index],
-                <size_t>self.spans.sizes[index],
+                <size_t>span,
             )
+            # memset(values_ptr + index * itemsize + span, 0, <size_t>(itemsize - span))
+
         return values
 
     cpdef cnp.ndarray to_numpy_string_dtype(self):

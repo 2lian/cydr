@@ -441,9 +441,16 @@ def _wrap_deserialize_call(
     def wrapper(
         data,
         flat: bool = False,
-        string_collections: StringCollectionMode = DEFAULT_STRING_COLLECTION_MODE,
+        string_collections: StringCollectionMode | None = None,
     ):
-        flat_values = function(data, int(string_collections))
+        flat_values = function(
+            data,
+            (
+                int(string_collections)
+                if string_collections is not None
+                else DEFAULT_STRING_COLLECTION_MODE
+            ),
+        )
         if len(flat_values) != expected_arg_count:
             raise ValueError(
                 f"deserialize expected {expected_arg_count} flattened values, "
