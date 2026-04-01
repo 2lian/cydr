@@ -30,11 +30,9 @@ Runnable examples:
 
 ## Benchmarks
 
-`cydr` exists primarily to be faster than the general-purpose Python path while staying easy to call from Python.
+Those benchmarks were performed on `JointState` messages containing 3 sequence of floats, 1 sequence of strings, one nested `Header` (containing a string, and another nested `Time` with 2 integers). The `Count` row of table idicates the length of the 4 sequences.
 
-The latest local `JointState` benchmark results against `cyclonedds_idl`:
-
-Serialize
+#### Serialize
 
 | Case | Count | Bytes | Implementation | Median | Speedup |
 |---|---:|---:|---|---:|---:|
@@ -45,7 +43,7 @@ Serialize
 | large | 10000 | 400052 | `cydr_struct` | `54.70 us` | `164.57x` |
 | large | 10000 | 400052 | `cyclonedds_idl` | `8993.45 us` | `1.00x` |
 
-Deserialize
+#### Deserialize
 
 | Case | Count | Bytes | Implementation | Median | Speedup |
 |---|---:|---:|---|---:|---:|
@@ -140,21 +138,17 @@ decoded = JointState.deserialize(payload)
 ## Runtime Conventions
 
 - Keys are ignored when calling the (de)serializers.
-- Ordering of schema entries is critical and changes the schema.
+- Ordering of schema entries is what dictates the codec.
 - Deserializers rebuild messages using the schema shape provided at their creation.
 
-This means schema order and runtime value order must match.
+This means schema order and runtime value order must match. We do not verify the data as it is an expensive operation when talking ~2us in python (creating the Struct object actually takes longer than the codec at those speed)
 
 ## Cache
 
 Generated codecs are cached by the hash of the flattened field-type sequence.
 
 - Default cache dir: `./.cydr_cache`
-- If that cannot be created, `cydr` falls back to a temporary directory and emits a `RuntimeWarning`
 - Override globally with `CYDR_CACHE_DIR=/path/to/cache`
-- Override for the whole process with `CYDR_CACHE_DIR=/path/to/cache` before import
-
-Test and benchmark schemas are defined next to those call sites instead of inside the library package.
 
 # Benchmarks per primitives
 
