@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Optional, Self, Union, get_type_hints
+from typing import ClassVar, Optional, TypeVar, Union, get_type_hints
 
 import msgspec
 
@@ -18,6 +18,9 @@ from .schema_types import (
     flatten_schema_fields,
     normalize_field_schema,
 )
+
+
+_XcdrStructT = TypeVar("_XcdrStructT", bound="XcdrStruct")
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +129,9 @@ class XcdrStruct(msgspec.Struct, gc=False):
         return flattened
 
     @classmethod
-    def _from_flat(cls, values: list[object] | tuple[object, ...]) -> Self:
+    def _from_flat(
+        cls: type[_XcdrStructT], values: list[object] | tuple[object, ...]
+    ) -> _XcdrStructT:
         """Construct this struct from the flattened runtime value representation."""
         schema_info = cls._schema_info()
 
@@ -148,7 +153,9 @@ class XcdrStruct(msgspec.Struct, gc=False):
         return cls(*field_values)
 
     @classmethod
-    def _from_nested_dict(cls, values: Mapping[str, object]) -> Self:
+    def _from_nested_dict(
+        cls: type[_XcdrStructT], values: Mapping[str, object]
+    ) -> _XcdrStructT:
         """Construct this struct from the nested dict value representation.
 
         Args:
@@ -187,10 +194,10 @@ class XcdrStruct(msgspec.Struct, gc=False):
 
     @classmethod
     def deserialize(
-        cls,
+        cls: type[_XcdrStructT],
         data: Union[bytes, bytearray, memoryview],
         string_collections: Optional[StringCollectionMode] = None,
-    ) -> Self:
+    ) -> _XcdrStructT:
         """Deserialize one payload into this struct type."""
         return cls._from_flat(
             cls._get_codec().deserialize(

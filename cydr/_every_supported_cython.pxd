@@ -15,7 +15,6 @@ cimport numpy as cnp
 cdef int ENCAPSULATION_HEADER_SIZE
 cdef int STRING_COLLECTION_MODE_NUMPY
 cdef int STRING_COLLECTION_MODE_LIST
-cdef int STRING_COLLECTION_MODE_STRING_DTYPE
 cdef int STRING_COLLECTION_MODE_RAW
 
 cdef void validate_encapsulation_header(const unsigned char[::1] data) except *
@@ -115,7 +114,6 @@ cdef class DecodedStringCollection:
     ) noexcept
     cpdef list to_list(self)
     cpdef cnp.ndarray to_numpy(self)
-    cpdef cnp.ndarray to_numpy_string_dtype(self)
     cpdef object to_final(self, int string_collection_mode)
 
 cdef DecodedStringCollection read_string_array_object(

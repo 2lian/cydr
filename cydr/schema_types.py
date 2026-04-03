@@ -2,8 +2,10 @@
 
 import typing
 from collections.abc import Mapping
+from typing import TypeAlias, Union
 
 import numpy as np
+from numpy._typing import NDArray
 from nptyping.nptyping_type import NPTypingType
 from nptyping.shape import ShapeMeta
 
@@ -95,10 +97,10 @@ def _ndarray_fixed_length(annotation: object) -> int | None:
 # Flat field types
 # ---------------------------------------------------------------------------
 
-type FlatField = PrimitiveSchemaType | type  # type is an NDArray annotation for collections
-type NestedSchemaFields = Mapping[
+FlatField: TypeAlias = PrimitiveSchemaType | NDArray
+NestedSchemaFields: TypeAlias = Mapping[
     str,
-    PrimitiveSchemaType | type | NestedSchemaFields,
+    Union[PrimitiveSchemaType, NDArray, "NestedSchemaFields"],
 ]
 
 

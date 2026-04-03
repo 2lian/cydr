@@ -2,19 +2,23 @@
 authors = ["Neppel Elian <elian.neppel@posteo.eu>"]
 channels = ["conda-forge"]
 name = "cydr"
-platforms = ["linux-64"]
+platforms = ["linux-64", "win-64", "osx-64", "osx-arm64", "linux-aarch64"]
 version = "0.1.0"
 
-[tasks]
-bench-joint-state-cython = "python -m bench.joint_state_cython_serialization"
-bench-every-supported-cython = "python -m bench.every_supported_cython_serialization"
-bench-fixed-arrays-cython = "python -m bench.fixed_arrays_cython_serialization"
-bench-primitive-matrix-cython = "python -m bench.primitive_matrix_cython_serialization"
+[environments]
+default = { features = ["py312", "np1"], solve-group = "py312-np1" }
+dev = { features = ["py312", "np1"], solve-group = "py312-np1" }
+py310-np1 = { features = ["py310", "np1"], solve-group = "py310-np1" }
+py310-np2 = { features = ["py310", "np2"], solve-group = "py310-np2" }
+py311-np1 = { features = ["py311", "np1"], solve-group = "py311-np1" }
+py311-np2 = { features = ["py311", "np2"], solve-group = "py311-np2" }
+py312-np1 = { features = ["py312", "np1"], solve-group = "py312-np1" }
+py312-np2 = { features = ["py312", "np2"], solve-group = "py312-np2" }
+# NumPy 1.26.x is the last NumPy 1 release and only supports Python 3.10-3.12.
+py313-np2 = { features = ["py313", "np2"], solve-group = "py313-np2" }
+py314-np2 = { features = ["py314", "np2"], solve-group = "py314-np2" }
 
 [dependencies]
-python = "3.*"
-# numpy = ">=2.4.3,<3"
-numpy = ">=1.0.0,<2"
 pyright = "*"
 isort = "*"
 black = "*"
@@ -23,6 +27,28 @@ colorama = "*"
 cython = "*"
 glow-md = "*"
 msgspec = "*"
+c-compiler = ">=1.11.0,<2"
+
+[feature.py310.dependencies]
+python = "3.10.*"
+
+[feature.py311.dependencies]
+python = "3.11.*"
+
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[feature.py313.dependencies]
+python = "3.13.*"
+
+[feature.py314.dependencies]
+python = "3.14.*"
+
+[feature.np1.dependencies]
+numpy = "1.26.*"
+
+[feature.np2.dependencies]
+numpy = "2.*"
 
 [pypi-dependencies]
 cyclonedds-idl = ">=0.1.0, <0.2"

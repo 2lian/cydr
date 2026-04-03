@@ -324,7 +324,7 @@ def test_deserializer_supports_flat_output() -> None:
         if isinstance(actual_value, np.ndarray) or isinstance(expected_value, np.ndarray):
             assert isinstance(actual_value, np.ndarray)
             assert isinstance(expected_value, np.ndarray)
-            if actual_value.dtype.kind in {"S", "T"} and expected_value.dtype.kind in {"S", "T"}:
+            if actual_value.dtype.kind == "S" and expected_value.dtype.kind == "S":
                 _assert_string_collection_equal(actual_value, expected_value)
                 continue
             assert actual_value.dtype == expected_value.dtype

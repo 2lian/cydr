@@ -67,7 +67,7 @@ float32: TypeAlias = np.float32 #: XCDR 32-bit float.
 float64: TypeAlias = np.float64 #: XCDR 64-bit float.
 string: TypeAlias = bytes       #: XCDR string. Runtime value: UTF-8 bytes.
 
-type PrimitiveSchemaType = (
+PrimitiveSchemaType: TypeAlias = (
     type[boolean]
     | type[uint8]
     | type[int8]

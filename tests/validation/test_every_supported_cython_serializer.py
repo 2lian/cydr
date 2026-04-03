@@ -2,15 +2,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pytest
-import pyximport
 
 from cyclonedds_idl import IdlStruct, types
+from cydr import boolean, get_codec_for
 
 from ..schema import Time
-pyximport.install(
-    language_level=3,
-    setup_args={"include_dirs": np.get_include()},
-)
+
+# Warm the helper backend through cydr's normal runtime path so this test uses
+# the same pyximport/cache behavior as the library itself.
+get_codec_for({"_warmup": boolean})
 
 from cydr._every_supported_cython import (
     compute_serialized_size_every_supported_schema,
@@ -438,18 +438,6 @@ def test_string_collections_as_numpy_bytes_array_matches_cyclone() -> None:
     values = _make_string_inputs_with(
         text_array=np.array(STRING_COLLECTION_VALUES[:2], dtype=np.bytes_),
         text_sequence=np.array(STRING_COLLECTION_VALUES, dtype=np.bytes_),
-    )
-
-    assert serialize_cython(values) == _cyclone_reference_bytes()
-
-
-def test_string_collections_as_numpy_string_dtype_matches_cyclone() -> None:
-    from numpy.dtypes import StringDType
-
-    string_dtype = StringDType()
-    values = _make_string_inputs_with(
-        text_array=np.array([s.decode("utf-8") for s in STRING_COLLECTION_VALUES[:2]], dtype=string_dtype),
-        text_sequence=np.array([s.decode("utf-8") for s in STRING_COLLECTION_VALUES], dtype=string_dtype),
     )
 
     assert serialize_cython(values) == _cyclone_reference_bytes()

@@ -3,10 +3,13 @@
 import hashlib
 import importlib
 import importlib.util
+import json
 import os
 import shutil
 import sys
+import sysconfig
 import tempfile
+import time
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -14,6 +17,7 @@ from enum import IntEnum
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
+import Cython
 import numpy as np
 import pyximport
 import pyximport.pyximport as pyximport_runtime
@@ -50,6 +54,7 @@ class GeneratedModuleInfo:
 
     module: object
     module_name: str
+    serializer_name: str
     flattened_fields: dict[str, FlatField]
     schema_hash: str
     cache_dir: Path
@@ -60,7 +65,6 @@ class StringCollectionMode(IntEnum):
 
     NUMPY = 0
     LIST = 1
-    STRING_DTYPE = 2
     RAW = 3
 
 
@@ -68,7 +72,7 @@ DEFAULT_STRING_COLLECTION_MODE = StringCollectionMode.NUMPY
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
-_SCHEMA_HASH_VERSION = "cydr-codegen-v8"
+_SCHEMA_HASH_VERSION = "cydr-codegen-v9"
 _DEFAULT_CACHE_NAME = ".cydr_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("CYDR_CACHE_DIR")
@@ -78,6 +82,124 @@ _HELPER_BACKEND_FILES = (
     "_every_supported_cython.pxd",
 )
 _SCHEMA_HASH_LENGTH = 32
+_ENV_PATH_KEY_LENGTH = 16
+_BUILD_PATH_KEY_LENGTH = 16
+_COMPILED_MODULE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _stable_json_dumps(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _extension_suffix() -> str:
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    if isinstance(suffix, str) and suffix:
+        return suffix
+    return EXTENSION_SUFFIXES[0]
+
+
+def _environment_metadata() -> dict[str, str]:
+    return {
+        "cache_tag": sys.implementation.cache_tag,
+        "python_version": (
+            f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        ),
+        "platform": sysconfig.get_platform(),
+        "extension_suffix": _extension_suffix(),
+        "numpy_version": np.__version__,
+        "cython_version": Cython.__version__,
+    }
+
+
+def _environment_cache_key() -> str:
+    return _sha256_text(_stable_json_dumps(_environment_metadata()))
+
+
+def _short_cache_key(value: str, length: int) -> str:
+    return value[:length]
+
+
+def _flat_schema_representation(
+    flattened_fields: Mapping[str, FlatField],
+) -> list[str]:
+    return [field_schema_token(field_type) for field_type in flattened_fields.values()]
+
+
+def _helper_backend_hash() -> str:
+    digest = hashlib.sha256()
+    for filename in _HELPER_BACKEND_FILES:
+        path = _PACKAGE_DIR / filename
+        digest.update(filename.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _compiled_extension_path(directory: Path, module_name: str) -> Path | None:
+    for suffix in EXTENSION_SUFFIXES:
+        candidate = directory / f"{module_name}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write text to *path* via a same-directory temp file and atomic replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path_str = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temp_path = Path(temp_path_str)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _write_text_if_changed(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Atomically replace *path* only when its text content differs."""
+    if path.exists() and path.read_text(encoding=encoding) == content:
+        return
+    _atomic_write_text(path, content, encoding=encoding)
+
+
+def _load_compiled_module(module_name: str, compiled_path: Path):
+    """Load one compiled extension module from an explicit filesystem path."""
+    spec = importlib.util.spec_from_file_location(module_name, compiled_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Could not load compiled serializer module from {compiled_path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _pyxbuild_root(environment_key: str) -> Path:
+    return Path(tempfile.gettempdir()) / "cydr_pyxbld" / _short_cache_key(
+        environment_key,
+        _ENV_PATH_KEY_LENGTH,
+    )
 
 
 def _resolve_cache_dir() -> Path:
@@ -210,8 +332,7 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
     shadow_package_dir.mkdir(parents=True, exist_ok=True)
 
     init_path = shadow_package_dir / "__init__.py"
-    if not init_path.exists() or init_path.read_text(encoding="utf-8") != _SHADOW_INIT:
-        init_path.write_text(_SHADOW_INIT, encoding="utf-8")
+    _write_text_if_changed(init_path, _SHADOW_INIT, encoding="utf-8")
 
     for filename in _HELPER_BACKEND_FILES:
         source_path = _PACKAGE_DIR / filename
@@ -237,7 +358,11 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
     return shadow_package_dir
 
 
-def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
+def _load_or_compile_generated_module(
+    cache_dir: Path,
+    module_name: str,
+    pyxbuild_dir: Path,
+):
     """Load a generated codec module from cache, compiling it first if needed.
 
     If a compiled ``.so`` already exists in ``cache_dir`` it is loaded
@@ -251,13 +376,17 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
     Args:
         cache_dir: The directory that contains the generated ``.pyx`` source
             and will receive the compiled ``.so``.
-        module_name: The importable module name, e.g. ``"schema_<hash>"``.
+        module_name: The importable module name for one build variant.
+        pyxbuild_dir: The temporary build root used by ``pyximport``.
 
     Returns:
         The loaded module object.
     """
     if module_name in sys.modules:
         return sys.modules[module_name]
+
+    shadow_package_dir = _ensure_shadow_backend_package(cache_dir)
+    pyxbuild_dir.mkdir(parents=True, exist_ok=True)
 
     helper_module = sys.modules.get("cydr._every_supported_cython")
     if helper_module is not None:
@@ -281,27 +410,22 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
 
     # First make the shared Cython backend importable from the cache.
     if "cydr._every_supported_cython" not in sys.modules:
-        shadow_package_dir = _ensure_shadow_backend_package(cache_dir)
         helper_module_name = "cydr._every_supported_cython"
         helper_source_path = shadow_package_dir / "_every_supported_cython.pyx"
-        helper_compiled_path = None
+        helper_compiled_path = _compiled_extension_path(
+            shadow_package_dir,
+            "_every_supported_cython",
+        )
 
         global _PYXIMPORT_READY
         if not _PYXIMPORT_READY:
             pyximport.install(
+                build_dir=str(pyxbuild_dir),
                 language_level=3,
                 inplace=True,
                 setup_args={"include_dirs": np.get_include()},
             )
             _PYXIMPORT_READY = True
-
-        for suffix in EXTENSION_SUFFIXES:
-            matches = sorted(
-                shadow_package_dir.glob(f"_every_supported_cython*{suffix}")
-            )
-            if matches:
-                helper_compiled_path = matches[0]
-                break
 
         helper_needs_rebuild = helper_compiled_path is None
         if not helper_needs_rebuild:
@@ -318,48 +442,40 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
                 pyximport_runtime.build_module(
                     helper_module_name,
                     str(helper_source_path),
-                    pyxbuild_dir=str(cache_dir / "_pyxbld"),
+                    pyxbuild_dir=str(pyxbuild_dir),
                     inplace=True,
                     language_level=3,
                 )
             )
-
-        helper_spec = importlib.util.spec_from_file_location(
-            helper_module_name,
-            helper_compiled_path,
-        )
-        if helper_spec is None or helper_spec.loader is None:
-            raise ImportError(
-                f"Could not load compiled helper module from {helper_compiled_path}"
-            )
-        helper_module = importlib.util.module_from_spec(helper_spec)
-        sys.modules[helper_module_name] = helper_module
         try:
-            helper_spec.loader.exec_module(helper_module)
+            helper_module = _load_compiled_module(
+                helper_module_name,
+                helper_compiled_path,
+            )
         except Exception:
-            sys.modules.pop(helper_module_name, None)
-            raise
+            time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
+            helper_compiled_path = _compiled_extension_path(
+                shadow_package_dir,
+                "_every_supported_cython",
+            )
+            if helper_compiled_path is None:
+                raise
+            helper_module = _load_compiled_module(
+                helper_module_name,
+                helper_compiled_path,
+            )
 
     # Reuse an already-compiled extension module when it exists.
-    for suffix in EXTENSION_SUFFIXES:
-        matches = sorted(cache_dir.glob(f"{module_name}*{suffix}"))
-        if not matches:
-            continue
-
-        compiled_path = matches[0]
-        spec = importlib.util.spec_from_file_location(module_name, compiled_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(
-                f"Could not load compiled serializer module from {compiled_path}"
-            )
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
+    compiled_path = _compiled_extension_path(cache_dir, module_name)
+    if compiled_path is not None:
         try:
-            spec.loader.exec_module(module)
+            return _load_compiled_module(module_name, compiled_path)
         except Exception:
-            sys.modules.pop(module_name, None)
-            raise
-        return module
+            time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
+            compiled_path = _compiled_extension_path(cache_dir, module_name)
+            if compiled_path is None:
+                raise
+            return _load_compiled_module(module_name, compiled_path)
 
     # Otherwise import the generated .pyx and let pyximport compile it.
     sys.path.insert(0, str(cache_dir))
@@ -368,7 +484,16 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
         return importlib.import_module(module_name)
     except Exception:
         sys.modules.pop(module_name, None)
-        raise
+        time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
+        importlib.invalidate_caches()
+        compiled_path = _compiled_extension_path(cache_dir, module_name)
+        if compiled_path is not None:
+            return _load_compiled_module(module_name, compiled_path)
+        try:
+            return importlib.import_module(module_name)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
     finally:
         sys.path.remove(str(cache_dir))
 
@@ -512,25 +637,69 @@ def _load_generated_codec(
     Returns:
         A ``GeneratedModuleInfo`` with the loaded module and its metadata.
     """
-    resolved_cache_dir = CYDR_CACHE_DIR
+    environment_key = _environment_cache_key()
+    environment_path_key = _short_cache_key(
+        environment_key,
+        _ENV_PATH_KEY_LENGTH,
+    )
+    resolved_cache_dir = CYDR_CACHE_DIR / f"env_{environment_path_key}"
+    resolved_pyxbuild_dir = _pyxbuild_root(environment_key)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
     flattened_fields = flatten_schema_fields(schema)
+    flat_schema = _flat_schema_representation(flattened_fields)
     schema_hash_value = schema_hash(schema)
-    module_name = f"schema_{schema_hash_value}"
-    source_path = resolved_cache_dir / f"{module_name}.pyx"
-
-    if not source_path.exists():
-        canonical_fields = {
+    serializer_name = f"schema_{schema_hash_value}"
+    generated_source = generate_cython_codec_module_source(
+        serializer_name,
+        {
             f"arg_{index}": field_type
             for index, field_type in enumerate(flattened_fields.values())
-        }
-        source = generate_cython_codec_module_source(module_name, canonical_fields)
-        source_path.write_text(source, encoding="utf-8")
+        },
+    )
+    generated_source_hash = _sha256_text(generated_source)
+    helper_backend_hash = _helper_backend_hash()
+    build_key = _sha256_text(
+        _stable_json_dumps(
+            {
+                "generated_source_hash": generated_source_hash,
+                "helper_backend_hash": helper_backend_hash,
+                "environment": _environment_metadata(),
+            }
+        )
+    )
+    build_path_key = _short_cache_key(build_key, _BUILD_PATH_KEY_LENGTH)
+    module_name = f"{serializer_name}_{build_path_key}"
+    source_path = resolved_cache_dir / f"{module_name}.pyx"
+    manifest_path = resolved_cache_dir / f"{module_name}.json"
+    manifest = {
+        "schema_hash": schema_hash_value,
+        "schema_hash_version": _SCHEMA_HASH_VERSION,
+        "serializer_name": serializer_name,
+        "module_name": module_name,
+        "environment_key": environment_key,
+        "environment_path_key": environment_path_key,
+        "build_key": build_key,
+        "build_path_key": build_path_key,
+        "generated_source_hash": generated_source_hash,
+        "helper_backend_hash": helper_backend_hash,
+        "environment": _environment_metadata(),
+        "expected_extension_filename": f"{module_name}{_extension_suffix()}",
+        "flat_schema": flat_schema,
+    }
+
+    _write_text_if_changed(source_path, generated_source, encoding="utf-8")
+    manifest_text = json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
+    _write_text_if_changed(manifest_path, manifest_text, encoding="utf-8")
 
     return GeneratedModuleInfo(
-        module=_load_or_compile_generated_module(resolved_cache_dir, module_name),
+        module=_load_or_compile_generated_module(
+            resolved_cache_dir,
+            module_name,
+            resolved_pyxbuild_dir,
+        ),
         module_name=module_name,
+        serializer_name=serializer_name,
         flattened_fields=flattened_fields,
         schema_hash=schema_hash_value,
         cache_dir=resolved_cache_dir,
@@ -555,12 +724,15 @@ def get_codec_for(
     module_info = _load_generated_codec(schema)
     compute_impl = getattr(
         module_info.module,
-        f"compute_serialized_size_{module_info.module_name}",
+        f"compute_serialized_size_{module_info.serializer_name}",
     )
-    serialize_impl = getattr(module_info.module, f"serialize_{module_info.module_name}")
+    serialize_impl = getattr(
+        module_info.module,
+        f"serialize_{module_info.serializer_name}",
+    )
     deserialize_impl = getattr(
         module_info.module,
-        f"deserialize_{module_info.module_name}",
+        f"deserialize_{module_info.serializer_name}",
     )
     field_names = tuple(module_info.flattened_fields)
 

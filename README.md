@@ -1,6 +1,13 @@
 # `cydr` Cython CDR
 
+| Requirements | Compatibility | Tests Matrix |
+|---|:---|:---:|
+| [![python](https://img.shields.io/badge/Python-3.10--3.14-blue?logo=python&logoColor=white)](./pyproject.toml) <br> [![numpy](https://img.shields.io/badge/NumPy-1.26%20%7C%202.x-013243?logo=numpy&logoColor=white)](./pixi.toml) | [![linux](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](./pixi.toml) <br> [![xcdr1](https://img.shields.io/badge/Wire-XCDR1-4c1)](./README.md#runtime-conventions) | Python: `3.10`, `3.11`, `3.12`, `3.13`, `3.14` <br> NumPy: `1.26`, `2.x` |
+
 `cydr` is a fast, opinionated `XCDR1` serializer and deserializer for Python. At runtime, it dynamically generates a small Cython codec for your schema, compiles it down to C and uses it to (de)serialize payloads. There is no compilation step for the user, we do it Just In Time using Cython.
+
+> [!NOTE]
+> `cydr` compiles generated Cython modules at runtime, so a working local C compiler toolchain is required.
 
 Priorities:
 
@@ -132,8 +139,8 @@ decoded = JointState.deserialize(payload)
 - `Sequence[Primitive]` -> `NDArray[Any, dtype]` defines a variable-length 1D collection of one primitive dtype.
 - `Array[n, Primitive]` -> `NDArray[Shape["n"], dtype]` defines a fixed-length 1D collection of one primitive dtype.
 - `Sequence[string]` -> `NDArray[Any, Bytes]` Represent a collection of strings with a numpy array of `np.bytes_` by default.
-  - When deserializing you can choose the representation using the Enum `StringCollectionMode`. `.LIST` mode (`list[bytes]`) is more performant from small arrays, or you can use the most performant `.RAW` mode, to manipulate a C wrapper directly. Numpy 2 `.STRING_DTYPE` mode (`StringDType`) is usually slower.
-  - When serializing, you can either pass `list[bytes]` or `array[np.bytes_]` or `array[np.StringDType]`
+  - When deserializing you can choose the representation using the Enum `StringCollectionMode`. `.LIST` mode (`list[bytes]`) is more performant from small arrays, or you can use the most performant `.RAW` mode, to manipulate a C wrapper directly.
+  - When serializing, you can either pass `list[bytes]` or `array[np.bytes_]`
 
 ## Runtime Conventions
 

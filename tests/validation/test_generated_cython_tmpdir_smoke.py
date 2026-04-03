@@ -1,13 +1,16 @@
 from dataclasses import dataclass, field
+import json
 
 import numpy as np
 import pytest
 
 from cyclonedds_idl import IdlStruct, types
 from cydr.idl import (
+    flatten_schema_fields,
     get_codec_for,
     schema_hash,
 )
+from cydr.schema_types import field_schema_token
 from ..cache import SCHEMA_CACHE_DIR
 from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA, Time
 
@@ -200,4 +203,17 @@ def test_generated_cython_module_compiles_from_tmp_dir_and_runs_once(
     cached_codec = get_codec_for(schema)
     assert bytes(cached_codec.serialize(values)) == generated_bytes
     expected_hash = schema_hash(schema)
-    assert (SCHEMA_CACHE_DIR / f"schema_{expected_hash}.pyx").exists()
+    assert codec.cache_dir.is_relative_to(SCHEMA_CACHE_DIR)
+    assert (codec.cache_dir / f"{codec.module_name}.pyx").exists()
+
+    manifest_path = codec.cache_dir / f"{codec.module_name}.json"
+    assert manifest_path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_hash"] == expected_hash
+    assert manifest["module_name"] == codec.module_name
+    assert manifest["serializer_name"] == f"schema_{expected_hash}"
+    assert manifest["flat_schema"] == [
+        field_schema_token(field_type)
+        for field_type in flatten_schema_fields(schema).values()
+    ]

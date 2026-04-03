@@ -27,52 +27,7 @@ from libc.string cimport memcpy
 from libc.string cimport memset
 
 cdef extern from *:
-    """
-    #include "string.h"
-
-    /* Access NpyString API through PyArray_API without NPY_FEATURE_VERSION guard.
-     * Indices from numpy/_core/include/numpy/__multiarray_api.h (numpy 2.x).
-     */
-    static inline npy_string_allocator* _cydr_acquire_allocator(
-            const PyArray_StringDTypeObject* d) {
-        return (*(npy_string_allocator* (*)(const PyArray_StringDTypeObject*))
-                PyArray_API[316])(d);
-    }
-    static inline void _cydr_release_allocator(npy_string_allocator* a) {
-        (*(void (*)(npy_string_allocator*)) PyArray_API[318])(a);
-    }
-    static inline int _cydr_npy_string_load(
-            npy_string_allocator* a,
-            const npy_packed_static_string* p,
-            npy_static_string* u) {
-        return (*(int (*)(npy_string_allocator*,
-                          const npy_packed_static_string*,
-                          npy_static_string*)) PyArray_API[313])(a, p, u);
-    }
-    static inline int _cydr_npy_string_pack(
-            npy_string_allocator* a,
-            npy_packed_static_string* p,
-            const char* buf,
-            size_t size) {
-        return (*(int (*)(npy_string_allocator*,
-                          npy_packed_static_string*,
-                          const char*,
-                          size_t)) PyArray_API[314])(a, p, buf, size);
-    }
-    """
     size_t strnlen(const char* s, size_t maxlen) noexcept nogil
-    cnp.npy_string_allocator* _cydr_acquire_allocator(
-        const cnp.PyArray_StringDTypeObject* d) noexcept
-    void _cydr_release_allocator(cnp.npy_string_allocator* a) noexcept
-    int _cydr_npy_string_load(
-        cnp.npy_string_allocator* a,
-        const cnp.npy_packed_static_string* p,
-        cnp.npy_static_string* u) noexcept
-    int _cydr_npy_string_pack(
-        cnp.npy_string_allocator* a,
-        cnp.npy_packed_static_string* p,
-        const char* buf,
-        size_t size) noexcept
 
 cimport cython
 cimport numpy as cnp
@@ -86,9 +41,7 @@ cdef int ENCAPSULATION_HEADER_SIZE = 4
 cdef int CDR_ALIGN_MAX = 8
 cdef int STRING_COLLECTION_MODE_NUMPY = 0
 cdef int STRING_COLLECTION_MODE_LIST = 1
-cdef int STRING_COLLECTION_MODE_STRING_DTYPE = 2
 cdef int STRING_COLLECTION_MODE_RAW = 3
-cdef object NUMPY_STRING_DTYPE = np.dtypes.StringDType()
 
 cdef class DecodedStringCollection:
     def __cinit__(self):
@@ -192,51 +145,17 @@ cdef class DecodedStringCollection:
 
         return values
 
-    cpdef cnp.ndarray to_numpy_string_dtype(self):
-        cdef Py_ssize_t index
-        cdef cnp.ndarray values
-        cdef cnp.npy_packed_static_string* slot
-        cdef cnp.npy_string_allocator* alloc = NULL
-        cdef char* values_ptr
-        cdef Py_ssize_t itemsize
-
-        values = np.empty(self.spans.count, dtype=NUMPY_STRING_DTYPE)
-        itemsize = cnp.PyArray_ITEMSIZE(values)
-        values_ptr = <char*>cnp.PyArray_DATA(values)
-        alloc = _cydr_acquire_allocator(
-            <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(values)
-        )
-        if alloc == NULL:
-            raise MemoryError()
-
-        try:
-            for index in range(self.spans.count):
-                slot = <cnp.npy_packed_static_string*>(values_ptr + index * itemsize)
-                if _cydr_npy_string_pack(
-                    alloc,
-                    slot,
-                    <const char*>(self.spans.base + self.spans.offsets[index]),
-                    <size_t>self.spans.sizes[index],
-                ) == -1:
-                    raise RuntimeError("Failed to pack StringDType element")
-        finally:
-            _cydr_release_allocator(alloc)
-
-        return values
-
     cpdef object to_final(self, int string_collection_mode):
         if string_collection_mode == STRING_COLLECTION_MODE_NUMPY:
             return self.to_numpy()
         if string_collection_mode == STRING_COLLECTION_MODE_LIST:
             return self.to_list()
-        if string_collection_mode == STRING_COLLECTION_MODE_STRING_DTYPE:
-            return self.to_numpy_string_dtype()
         if string_collection_mode == STRING_COLLECTION_MODE_RAW:
             return self
         raise ValueError(
             f"string_collection_mode must be one of "
             f"{STRING_COLLECTION_MODE_NUMPY}, {STRING_COLLECTION_MODE_LIST}, "
-            f"{STRING_COLLECTION_MODE_STRING_DTYPE}, or {STRING_COLLECTION_MODE_RAW}; "
+            f"or {STRING_COLLECTION_MODE_RAW}; "
             f"got {string_collection_mode!r}."
         )
 
@@ -634,9 +553,6 @@ cdef inline Py_ssize_t advance_string_array_position(
     cdef cnp.ndarray arr
     cdef cnp.dtype descr
     cdef const char* ptr
-    cdef cnp.npy_static_string s
-    cdef cnp.npy_packed_static_string* slot
-    cdef cnp.npy_string_allocator* alloc
 
     if type(values) is list:
         n = PyList_GET_SIZE(values)
@@ -659,25 +575,7 @@ cdef inline Py_ssize_t advance_string_array_position(
             )
         return pos
 
-    if descr.kind != c'T':
-        raise TypeError("Expected np.bytes_ or StringDType array for string collection.")
-
-    # StringDType ('T')
-    alloc = _cydr_acquire_allocator(
-        <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(arr)
-    )
-    ptr = <const char*>cnp.PyArray_DATA(arr)
-    itemsize = cnp.PyArray_ITEMSIZE(arr)
-    s.size = 0
-    s.buf = NULL
-    for index in range(n):
-        slot = <cnp.npy_packed_static_string*>(ptr + index * itemsize)
-        if _cydr_npy_string_load(alloc, slot, &s) == -1:
-            _cydr_release_allocator(alloc)
-            raise RuntimeError("Failed to load StringDType element")
-        pos = advance_string_raw(pos, <Py_ssize_t>s.size)
-    _cydr_release_allocator(alloc)
-    return pos
+    raise TypeError("Expected list[bytes] or np.bytes_ array for string collection.")
 
 
 cdef inline Py_ssize_t advance_string_sequence_position(
@@ -698,9 +596,6 @@ cdef inline Py_ssize_t write_string_array(
     cdef cnp.ndarray arr
     cdef cnp.dtype descr
     cdef const char* ptr
-    cdef cnp.npy_static_string s
-    cdef cnp.npy_packed_static_string* slot
-    cdef cnp.npy_string_allocator* alloc
 
     if type(values) is list:
         n = PyList_GET_SIZE(values)
@@ -727,25 +622,7 @@ cdef inline Py_ssize_t write_string_array(
             )
         return pos
 
-    if descr.kind != c'T':
-        raise TypeError("Expected np.bytes_ or StringDType array for string collection.")
-
-    # StringDType ('T')
-    alloc = _cydr_acquire_allocator(
-        <cnp.PyArray_StringDTypeObject*>cnp.PyArray_DESCR(arr)
-    )
-    ptr = <const char*>cnp.PyArray_DATA(arr)
-    itemsize = cnp.PyArray_ITEMSIZE(arr)
-    s.size = 0
-    s.buf = NULL
-    for index in range(n):
-        slot = <cnp.npy_packed_static_string*>(ptr + index * itemsize)
-        if _cydr_npy_string_load(alloc, slot, &s) == -1:
-            _cydr_release_allocator(alloc)
-            raise RuntimeError("Failed to load StringDType element")
-        pos = write_string_raw(buffer, pos, s.buf, <Py_ssize_t>s.size)
-    _cydr_release_allocator(alloc)
-    return pos
+    raise TypeError("Expected list[bytes] or np.bytes_ array for string collection.")
 
 
 cdef inline Py_ssize_t write_string_sequence(

@@ -1,4 +1,5 @@
 """Public cydr API."""
+
 from .idl import (
     CYDR_CACHE_DIR,
     Codec,
