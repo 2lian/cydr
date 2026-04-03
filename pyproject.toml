@@ -23,11 +23,17 @@ classifiers = [
     "Topic :: Software Development :: Code Generators",
     "Topic :: System :: Networking",
 ]
+# dependencies = [
+#     "Cython>=3.0,<4",
+#     "msgspec>=0.20.0,<0.21",
+#     "numpy>=1.0,<3",
+#     "np2typing>=2.6.3,<3",
+# ]
 dependencies = [
-    "Cython>=3.0,<4",
-    "msgspec>=0.20.0,<0.21",
-    "numpy>=2.0,<3",
-    "np2typing>=2.6.3,<3",
+    "Cython",
+    "msgspec",
+    "numpy",
+    "np2typing",
 ]
 
 [project.optional-dependencies]
