@@ -68,7 +68,7 @@ DEFAULT_STRING_COLLECTION_MODE = StringCollectionMode.NUMPY
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
-_SCHEMA_HASH_VERSION = "cydr-codegen-v7"
+_SCHEMA_HASH_VERSION = "cydr-codegen-v8"
 _DEFAULT_CACHE_NAME = ".cydr_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("CYDR_CACHE_DIR")
@@ -267,6 +267,17 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
             cache_helper_dir
         ):
             sys.modules.pop("cydr._every_supported_cython", None)
+        else:
+            helper_source_path = cache_helper_dir / "_every_supported_cython.pyx"
+            try:
+                helper_is_stale = (
+                    helper_source_path.stat().st_mtime_ns
+                    > Path(helper_path).resolve().stat().st_mtime_ns
+                )
+            except OSError:
+                helper_is_stale = True
+            if helper_is_stale:
+                sys.modules.pop("cydr._every_supported_cython", None)
 
     # First make the shared Cython backend importable from the cache.
     if "cydr._every_supported_cython" not in sys.modules:
@@ -292,7 +303,17 @@ def _load_or_compile_generated_module(cache_dir: Path, module_name: str):
                 helper_compiled_path = matches[0]
                 break
 
-        if helper_compiled_path is None:
+        helper_needs_rebuild = helper_compiled_path is None
+        if not helper_needs_rebuild:
+            try:
+                helper_needs_rebuild = (
+                    helper_source_path.stat().st_mtime_ns
+                    > helper_compiled_path.stat().st_mtime_ns
+                )
+            except OSError:
+                helper_needs_rebuild = True
+
+        if helper_needs_rebuild:
             helper_compiled_path = Path(
                 pyximport_runtime.build_module(
                     helper_module_name,

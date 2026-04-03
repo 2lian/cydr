@@ -12,7 +12,7 @@ bench-fixed-arrays-cython = "python -m bench.fixed_arrays_cython_serialization"
 bench-primitive-matrix-cython = "python -m bench.primitive_matrix_cython_serialization"
 
 [dependencies]
-python = "3.12.*"
+python = "3.13.*"
 numpy = ">=2.4.3,<3"
 pyright = "*"
 isort = "*"

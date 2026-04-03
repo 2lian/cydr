@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Optional, Self, get_type_hints
+from typing import ClassVar, Optional, Self, Union, get_type_hints
 
 import msgspec
 
@@ -118,8 +118,8 @@ class XcdrStruct(msgspec.Struct, gc=False):
         nested_indices = self._schema_info().nested_structs_by_index.keys()
 
         # for index, value in enumerate(flattened):
-            # if isinstance(value, XcdrStruct):
-                # nested_indices.append(index)
+        # if isinstance(value, XcdrStruct):
+        # nested_indices.append(index)
 
         for index in reversed(nested_indices):
             flattened[index : index + 1] = flattened[index]._to_flat()
@@ -187,7 +187,9 @@ class XcdrStruct(msgspec.Struct, gc=False):
 
     @classmethod
     def deserialize(
-        cls, data: object, string_collections: Optional[StringCollectionMode] = None
+        cls,
+        data: Union[bytes, bytearray, memoryview],
+        string_collections: Optional[StringCollectionMode] = None,
     ) -> Self:
         """Deserialize one payload into this struct type."""
         return cls._from_flat(

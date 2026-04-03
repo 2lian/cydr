@@ -16,6 +16,7 @@ from cydr.idl import (
     rebuild_runtime_values,
     int32,
     string,
+    uint8,
     uint32,
     warmup_codec,
 )
@@ -450,3 +451,23 @@ def test_codec_serialize_accepts_list_bytes_for_string_collections() -> None:
     cyclone_bytes = serialize_cyclone(values)
 
     assert generated_bytes == cyclone_bytes
+
+
+def test_deserializer_accepts_trailing_alignment_padding() -> None:
+    schema = {"value": uint8}
+    codec = get_codec_for(schema)
+    payload = bytes(codec.serialize({"value": np.uint8(0x5E)}))
+    padded_payload = payload + b"\xAA\x00\x00"
+
+    decoded = codec.deserialize(padded_payload)
+
+    assert int(decoded["value"]) == 0x5E
+
+
+def test_deserializer_rejects_non_padding_trailing_bytes() -> None:
+    schema = {"value": uint8}
+    codec = get_codec_for(schema)
+    payload = bytes(codec.serialize({"value": np.uint8(0x5E)}))
+
+    with np.testing.assert_raises(ValueError):
+        codec.deserialize(payload + b"\xAA")
