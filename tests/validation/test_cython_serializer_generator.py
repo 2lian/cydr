@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
+import sys
 from typing import Any
 
 import numpy as np
+import pytest
 from nptyping import Bytes, Float64, NDArray, Shape, UInt32
 
 from cyclonedds_idl import IdlStruct, types
@@ -22,6 +24,12 @@ from cydr.idl import (
 )
 from cydr.schema_types import field_schema_token
 from ..schema import EVERY_SUPPORTED_SCHEMA, EVERY_SUPPORTED_SCHEMA_FLAT, Time
+
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "cyclonedds_idl test fixtures are not compatible with Python 3.14",
+        allow_module_level=True,
+    )
 
 
 @dataclass

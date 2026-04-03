@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import sys
 
 import numpy as np
 import pytest
@@ -21,6 +22,12 @@ from cydr.idl import (
     uint64,
 )
 from ..schema import HEADER_SCHEMA, Time
+
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "cyclonedds_idl test fixtures are not compatible with Python 3.14",
+        allow_module_level=True,
+    )
 
 
 @dataclass

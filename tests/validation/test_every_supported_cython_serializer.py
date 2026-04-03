@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import sys
 
 import numpy as np
 import pytest
@@ -17,6 +18,12 @@ from cydr._every_supported_cython import (
     deserialize_every_supported_schema,
     serialize_every_supported_schema,
 )
+
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "cyclonedds_idl test fixtures are not compatible with Python 3.14",
+        allow_module_level=True,
+    )
 
 
 @dataclass

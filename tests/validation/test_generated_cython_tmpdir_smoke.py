@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -13,6 +14,12 @@ from cydr.idl import (
 from cydr.schema_types import field_schema_token
 from ..cache import SCHEMA_CACHE_DIR
 from ..schema import EVERY_SUPPORTED_SCHEMA, JOINT_STATE_SCHEMA, Time
+
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "cyclonedds_idl test fixtures are not compatible with Python 3.14",
+        allow_module_level=True,
+    )
 
 
 @dataclass
@@ -212,7 +219,7 @@ def test_generated_cython_module_compiles_from_tmp_dir_and_runs_once(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_hash"] == expected_hash
     assert manifest["module_name"] == codec.module_name
-    assert manifest["serializer_name"] == f"schema_{expected_hash}"
+    assert manifest["serializer_name"] == f"s{expected_hash}"
     assert manifest["flat_schema"] == [
         field_schema_token(field_type)
         for field_type in flatten_schema_fields(schema).values()

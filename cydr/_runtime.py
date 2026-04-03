@@ -73,6 +73,7 @@ DEFAULT_STRING_COLLECTION_MODE = StringCollectionMode.NUMPY
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PYXIMPORT_READY = False
 _SCHEMA_HASH_VERSION = "cydr-codegen-v9"
+_IS_WINDOWS = os.name == "nt"
 _DEFAULT_CACHE_NAME = ".cydr_cache"
 _FALLBACK_CACHE_DIR: Path | None = None
 _ENV_CACHE_DIR = os.environ.get("CYDR_CACHE_DIR")
@@ -82,9 +83,12 @@ _HELPER_BACKEND_FILES = (
     "_every_supported_cython.pxd",
 )
 _SCHEMA_HASH_LENGTH = 32
-_ENV_PATH_KEY_LENGTH = 16
-_BUILD_PATH_KEY_LENGTH = 16
+_ENV_PATH_KEY_LENGTH = 6 if _IS_WINDOWS else 16
+_BUILD_PATH_KEY_LENGTH = 6 if _IS_WINDOWS else 8
 _COMPILED_MODULE_RETRY_DELAY_SECONDS = 0.05
+_ENV_DIR_PREFIX = "" if _IS_WINDOWS else "env_"
+_SERIALIZER_PREFIX = "s"
+_PYXBUILD_ROOT_NAME = "b" if _IS_WINDOWS else "cydr_pyxbld"
 
 
 def _stable_json_dumps(value: object) -> str:
@@ -196,7 +200,7 @@ def _load_compiled_module(module_name: str, compiled_path: Path):
 
 
 def _pyxbuild_root(environment_key: str) -> Path:
-    return Path(tempfile.gettempdir()) / "cydr_pyxbld" / _short_cache_key(
+    return Path(tempfile.gettempdir()) / _PYXBUILD_ROOT_NAME / _short_cache_key(
         environment_key,
         _ENV_PATH_KEY_LENGTH,
     )
@@ -642,14 +646,14 @@ def _load_generated_codec(
         environment_key,
         _ENV_PATH_KEY_LENGTH,
     )
-    resolved_cache_dir = CYDR_CACHE_DIR / f"env_{environment_path_key}"
+    resolved_cache_dir = CYDR_CACHE_DIR / f"{_ENV_DIR_PREFIX}{environment_path_key}"
     resolved_pyxbuild_dir = _pyxbuild_root(environment_key)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
     flattened_fields = flatten_schema_fields(schema)
     flat_schema = _flat_schema_representation(flattened_fields)
     schema_hash_value = schema_hash(schema)
-    serializer_name = f"schema_{schema_hash_value}"
+    serializer_name = f"{_SERIALIZER_PREFIX}{schema_hash_value}"
     generated_source = generate_cython_codec_module_source(
         serializer_name,
         {
