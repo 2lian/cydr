@@ -2,7 +2,7 @@
 
 | Requirements | Compatibility | Tests Matrix |
 |---|:---|:---:|
-| [![python](https://img.shields.io/badge/Python-3.10--3.14-blue?logo=python&logoColor=white)](./pyproject.toml) <br> [![numpy](https://img.shields.io/badge/NumPy-1.26%20%7C%202.x-013243?logo=numpy&logoColor=white)](./pixi.toml) | [![linux](https://img.shields.io/badge/Platform-Linux-FCC624?logo=linux&logoColor=black)](./pixi.toml) <br> [![xcdr1](https://img.shields.io/badge/Wire-XCDR1-4c1)](./README.md#runtime-conventions) | Python: `3.10`, `3.11`, `3.12`, `3.13`, `3.14` <br> NumPy: `1.26`, `2.x` |
+| [![python](https://img.shields.io/badge/Python-3.10--3.14-blue?logo=python&logoColor=white)](./pyproject.toml) <br> [![numpy](https://img.shields.io/badge/NumPy-1.26%20%7C%202.x-013243?logo=numpy&logoColor=white)](./pixi.toml) | [![linux](https://img.shields.io/badge/Linux-supported-FCC624?logo=linux&logoColor=black)](./pixi.toml) <br> [![windows](https://img.shields.io/badge/Windows-supported-0078D6?logo=windows&logoColor=white)](./pixi.toml) <br> [![macos](https://img.shields.io/badge/macOS-supported-111111?logo=apple&logoColor=white)](./pixi.toml) <br> [![xcdr1](https://img.shields.io/badge/Wire-XCDR1-4c1)](./README.md#runtime-conventions) | Python: `3.10`, `3.11`, `3.12`, `3.13`, `3.14` <br> NumPy: `1.26`, `2.x` <br> |
 
 `cydr` is a fast, opinionated `XCDR1` serializer and deserializer for Python. At runtime, it dynamically generates a small Cython codec for your schema, compiles it down to C and uses it to (de)serialize payloads. There is no compilation step for the user, we do it Just In Time using Cython.
 
