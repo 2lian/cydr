@@ -4,7 +4,7 @@
 |---|:---|:---:|
 | [![python](https://img.shields.io/badge/Python-3.10--3.14-%20blue?logo=python&logoColor=white)](./pyproject.toml) <br> [![numpy](https://img.shields.io/badge/NumPy-1.26%20%7C%202.x-%20blue?logo=numpy&logoColor=white)](./pixi.toml) <br> [![mit](https://img.shields.io/badge/License-MIT-gold)](https://opensource.org/license/mit) | [![linux](https://img.shields.io/badge/OS-Linux-black?logo=linux&logoColor=white)](./pixi.toml) <br> [![windows](https://img.shields.io/badge/OS-Windows-black?logo=windows)](./pixi.toml) <br> [![macos](https://img.shields.io/badge/OS-macOS-black?logo=apple)](./pixi.toml) <br> [![xcdr1](https://img.shields.io/badge/Wire-XCDR1-blue)](./README.md#runtime-conventions) | Python: `3.10`, `3.11`, `3.12`, `3.13`, `3.14` <br> NumPy: `1.26`, `2.x`<br> [![Tests](https://github.com/2lian/cydr/actions/workflows/tests.yml/badge.svg)](https://github.com/2lian/cydr/actions/workflows/tests.yml)|
 
-`cydr` is a fast, pythonic, opinionated `XCDR1` (de)serializer and IDL for Python, with just in time (JIT) compilation! After defining your message schema simply with a python class, `cydr` generates a Cython codec, and compiles it down to C for BlAzInGlY fast performances.
+`cydr` is a fast, pythonic, focused `XCDR1` serializer/deserializer for Python with a schema API and just-in-time compilation. After defining your message schema with a Python class, `cydr` generates a Cython codec and compiles it down to C unlocking sub-microsecond operations.
 
 > [!NOTE]
 > A working C compiler toolchain is required at runtime.
@@ -44,23 +44,23 @@ Those benchmarks were performed on `JointState` messages containing 3 sequence o
 
 | Case | Count | Bytes | Implementation | Median | Speedup |
 |---|---:|---:|---|---:|---:|
-| small | 8 | 372 | `cydr_dict` | `2.22 us` | `6.53x` |
-| small | 8 | 372 | `cydr_struct` | `1.99 us` | `7.05x` |
-| small | 8 | 372 | `cyclonedds_idl` | `14.01 us` | `1.00x` |
-| large | 10000 | 400052 | `cydr_dict` | `55.07 us` | `164.55x` |
-| large | 10000 | 400052 | `cydr_struct` | `54.70 us` | `164.57x` |
-| large | 10000 | 400052 | `cyclonedds_idl` | `8993.45 us` | `1.00x` |
+| small | 8 | 372 | `cydr_dict` | `2.22 μs` | `6.53x` |
+| small | 8 | 372 | `cydr_struct` | `1.99 μs` | `7.05x` |
+| small | 8 | 372 | `cyclonedds_idl` | `14.01 μs` | `1.00x` |
+| large | 10000 | 400052 | `cydr_dict` | `55.07 μs` | `164.55x` |
+| large | 10000 | 400052 | `cydr_struct` | `54.70 μs` | `164.57x` |
+| large | 10000 | 400052 | `cyclonedds_idl` | `8993.45 μs` | `1.00x` |
 
 #### Deserialize
 
 | Case | Count | Bytes | Implementation | Median | Speedup |
 |---|---:|---:|---|---:|---:|
-| small | 8 | 372 | `cydr_dict` | `3.67 us` | `4.21x` |
-| small | 8 | 372 | `cydr_struct` | `2.84 us` | `5.25x` |
-| small | 8 | 372 | `cyclonedds_idl` | `14.80 us` | `1.00x` |
-| large | 10000 | 400052 | `cydr_dict` | `46.63 us` | `170.36x` |
-| large | 10000 | 400052 | `cydr_struct` | `41.01 us` | `172.04x` |
-| large | 10000 | 400052 | `cyclonedds_idl` | `7055.84 us` | `1.00x` |
+| small | 8 | 372 | `cydr_dict` | `3.67 μs` | `4.21x` |
+| small | 8 | 372 | `cydr_struct` | `2.84 μs` | `5.25x` |
+| small | 8 | 372 | `cyclonedds_idl` | `14.80 μs` | `1.00x` |
+| large | 10000 | 400052 | `cydr_dict` | `46.63 μs` | `170.36x` |
+| large | 10000 | 400052 | `cydr_struct` | `41.01 μs` | `172.04x` |
+| large | 10000 | 400052 | `cyclonedds_idl` | `7055.84 μs` | `1.00x` |
 
 ## Quick Start
 
@@ -151,7 +151,7 @@ Generated codecs are cached by the hash of the flattened field-type sequence.
 
 # Benchmarks per primitives
 
-| Primitive | Kind | Size | Count/Len | Payload Bytes | Dict Ser us | Struct Ser us | Cyclone Ser us | Dict Deser us | Struct Deser us | Cyclone Deser us |
+| Primitive | Kind | Size | Count/Len | Payload Bytes | Dict Ser μs | Struct Ser μs | Cyclone Ser μs | Dict Deser μs | Struct Deser μs | Cyclone Deser μs |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `boolean` | `scalar` | `scalar` | 1 | 5 | 0.41 | 0.63 | 2.09 | 0.83 | 0.73 | 2.05 |
 | `boolean` | `array` | `small` | 16 | 20 | 0.58 | 0.83 | 2.51 | 0.91 | 0.80 | 2.18 |

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cydr"
 version = "0.1.0"
-description = "Generate and cache Cython-backed XCDR1 serializers from nested Python schemas."
+description = "A fast, pythonic, focused XCDR1 serializer/deserializer for Python with a schema API and just-in-time compilation."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
