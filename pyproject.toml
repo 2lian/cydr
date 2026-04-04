@@ -10,6 +10,7 @@ version = "0.1.0"
 description = "Generate and cache Cython-backed XCDR1 serializers from nested Python schemas."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 authors = [
     { name = "Elian Neppel" },
 ]
@@ -17,23 +18,25 @@ keywords = ["cdr", "xcdr", "cyclonedds", "cython", "serialization"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Cython",
     "Topic :: Software Development :: Code Generators",
     "Topic :: System :: Networking",
 ]
-# dependencies = [
-#     "Cython>=3.0,<4",
-#     "msgspec>=0.20.0,<0.21",
-#     "numpy>=1.0,<3",
-#     "np2typing>=2.6.3,<3",
-# ]
 dependencies = [
-    "Cython",
-    "msgspec",
-    "numpy",
-    "np2typing",
+    "Cython>=3.0,<4",
+    "msgspec>=0.20.0,<1",
+    "numpy>=1.26,<3",
+    "np2typing>=2.6.3,<3",
 ]
 
 [project.optional-dependencies]

@@ -4730,12 +4730,12 @@ packages:
 - pypi: ./
   name: cydr
   version: 0.1.0
-  sha256: 50fe41933c4499fda1a60eb4f20470cbb8071c39c605782ff5a6b8d1cc23b57e
+  sha256: f4c30e798413006d6c5a06486327006a34a3349622ef36f624f23fbd9571c377
   requires_dist:
-  - cython
-  - msgspec
-  - numpy
-  - np2typing
+  - cython>=3.0,<4
+  - msgspec>=0.20.0,<1
+  - numpy>=1.26,<3
+  - np2typing>=2.6.3,<3
   - cyclonedds-idl>=0.1.0,<0.2 ; extra == 'dev'
   requires_python: '>=3.10'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/cython-3.2.4-py310ha58568a_0.conda

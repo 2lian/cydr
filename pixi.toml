@@ -24,9 +24,9 @@ isort = "*"
 black = "*"
 pytest = "*"
 colorama = "*"
-cython = "*"
+cython = ">=3.0,<4"
 glow-md = "*"
-msgspec = "*"
+msgspec = ">=0.20.0,<1"
 c-compiler = ">=1.11.0,<2"
 
 [feature.py310.dependencies]
@@ -53,4 +53,4 @@ numpy = "2.*"
 [pypi-dependencies]
 cyclonedds-idl = ">=0.1.0, <0.2"
 cydr = { path = ".", editable = true }
-np2typing = "*"
+np2typing = ">=2.6.3,<3"
