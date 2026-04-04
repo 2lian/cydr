@@ -9,8 +9,8 @@ from nptyping import Bool, Bytes, Float32, Float64, Int8, Int16, Int32, Int64, N
 
 from cyclonedds_idl import IdlStruct, types
 
-from bench._common import BenchmarkCase, benchmark_case, print_environment, print_results
-from bench.schema import EVERY_SUPPORTED_SCHEMA, Time
+from _common import BenchmarkCase, benchmark_case, print_environment, print_results
+from schema import EVERY_SUPPORTED_SCHEMA, Time
 from cydr import assert_messages_equal
 from cydr.idl import (
     CYDR_CACHE_DIR,

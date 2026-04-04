@@ -61,10 +61,6 @@ Those benchmarks were performed on `JointState` messages containing 3 sequence o
 | large | 10000 | 400052 | `cydr_struct` | `41.01 us` | `172.04x` |
 | large | 10000 | 400052 | `cyclonedds_idl` | `7055.84 us` | `1.00x` |
 
-These numbers were produced with:
-
-- `pixi run bench-joint-state-cython`
-
 ## Quick Start
 
 ```python

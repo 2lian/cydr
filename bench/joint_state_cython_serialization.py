@@ -8,13 +8,13 @@ import numpy as np
 from cyclonedds_idl import IdlStruct, types
 from nptyping import Bytes, Float64, NDArray
 
-from bench._common import (
+from _common import (
     BenchmarkCase,
     benchmark_case,
     print_environment,
     print_results,
 )
-from bench.schema import JOINT_STATE_SCHEMA, Time
+from schema import JOINT_STATE_SCHEMA, Time
 from cydr import assert_messages_equal
 from cydr._runtime import StringCollectionMode
 from cydr.idl import CYDR_CACHE_DIR, XcdrStruct, get_codec_for, int32, string, uint32

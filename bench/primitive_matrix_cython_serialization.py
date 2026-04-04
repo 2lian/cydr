@@ -9,7 +9,7 @@ from nptyping import NDArray, Shape
 
 from cyclonedds_idl import IdlStruct, types
 
-from bench._common import measure_runtime, print_environment
+from _common import measure_runtime, print_environment
 from cydr import assert_messages_equal
 from cydr.idl import (
     CYDR_CACHE_DIR,
