@@ -4729,8 +4729,8 @@ packages:
   requires_python: '>=3.10,<3.14'
 - pypi: ./
   name: cydr
-  version: 0.1.1
-  sha256: 4fce45ebc546da5a28185d051c30d9b2ab30a43693abf36b8266639796dcd44f
+  version: 0.1.2
+  sha256: f37828109879406c2d8470891b2dbec092233f3bbe9dd42ef71944e727f83487
   requires_dist:
   - cython>=3.0,<4
   - msgspec>=0.20.0,<1
