@@ -341,6 +341,11 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
     for filename in _HELPER_BACKEND_FILES:
         source_path = _PACKAGE_DIR / filename
         target_path = shadow_package_dir / filename
+        try:
+            if target_path.exists() and target_path.resolve() == source_path.resolve():
+                continue
+        except OSError:
+            pass
 
         if target_path.is_symlink():
             try:
@@ -351,13 +356,19 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
             target_path.unlink()
 
         if target_path.exists():
-            shutil.copy2(source_path, target_path)
+            try:
+                shutil.copy2(source_path, target_path)
+            except shutil.SameFileError:
+                continue
             continue
 
         try:
             target_path.symlink_to(source_path)
         except OSError:
-            shutil.copy2(source_path, target_path)
+            try:
+                shutil.copy2(source_path, target_path)
+            except shutil.SameFileError:
+                continue
 
     return shadow_package_dir
 

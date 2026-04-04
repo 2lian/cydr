@@ -1,5 +1,5 @@
 [workspace]
-authors = ["Neppel Elian <elian.neppel@posteo.eu>"]
+authors = ["Neppel Elian <elian.dev@posteo.com>"]
 channels = ["conda-forge"]
 name = "cydr"
 platforms = ["linux-64", "win-64", "osx-64", "osx-arm64", "linux-aarch64"]
