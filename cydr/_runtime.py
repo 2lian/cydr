@@ -15,6 +15,8 @@ import warnings
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from distutils.dist import Distribution
+from distutils.errors import DistutilsArgError
 from enum import IntEnum
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
@@ -448,8 +450,9 @@ def _load_or_compile_generated_module(
         force_rebuild: bool = False,
     ) -> Path:
         source_path = source_path if source_path.is_absolute() else source_path.absolute()
-        module_build_dir = pyxbuild_dir / module_name.replace(".", "_")
-        stage_root = module_build_dir / "src"
+        module_key = module_name.replace(".", "_")
+        module_build_dir = pyxbuild_dir / module_key
+        stage_root = cache_dir / "_src" / module_key
         stage_root.mkdir(parents=True, exist_ok=True)
 
         if module_name == "cydr._every_supported_cython":
@@ -482,18 +485,75 @@ def _load_or_compile_generated_module(
         all_setup_args["include_dirs"] = [str(stage_root), *include_dirs]
         cleanup_build_dir = True
         try:
-            staged_compiled_path = Path(
-                pyxbuild.pyx_to_dll(
-                    str(staged_source_path),
-                    extension_mod,
-                    force_rebuild=int(force_rebuild),
-                    build_in_temp=False,
-                    pyxbuild_dir=str(module_build_dir),
-                    setup_args=all_setup_args,
-                    reload_support=False,
-                    inplace=True,
-                )
+            class FlatObjectPathBuildExt(pyxbuild.build_ext):
+                def build_extension(self, ext) -> None:
+                    original_object_filenames = self.compiler.object_filenames
+
+                    def flat_object_filenames(
+                        source_filenames,
+                        strip_dir: bool = False,
+                        output_dir: str | os.PathLike[str] | None = "",
+                    ) -> list[str]:
+                        return original_object_filenames(
+                            source_filenames,
+                            strip_dir=True,
+                            output_dir=output_dir,
+                        )
+
+                    self.compiler.object_filenames = flat_object_filenames
+                    try:
+                        super().build_extension(ext)
+                    finally:
+                        self.compiler.object_filenames = original_object_filenames
+
+            script_args = list(all_setup_args.get("script_args", []))
+            quiet = "--verbose" if pyxbuild.DEBUG or "--verbose" in script_args else "--quiet"
+            build_args = [quiet, "build_ext"]
+            if force_rebuild:
+                build_args.append("--force")
+
+            package_base_dir = staged_source_path.parent
+            for package_name in module_name.split(".")[-2::-1]:
+                package_base_dir, dirname = os.path.split(package_base_dir)
+                if dirname != package_name:
+                    package_base_dir = None
+                    break
+
+            if package_base_dir:
+                build_args.extend(["--build-lib", package_base_dir])
+
+            dist_args = all_setup_args.copy()
+            dist_args.update(
+                {
+                    "script_name": None,
+                    "script_args": build_args + script_args,
+                }
             )
+
+            dist = Distribution(dist_args)
+            if not dist.ext_modules:
+                dist.ext_modules = []
+            dist.ext_modules.append(extension_mod)
+            dist.cmdclass = {"build_ext": FlatObjectPathBuildExt}
+            build = dist.get_command_obj("build")
+            build.build_base = str(module_build_dir)
+
+            cfgfiles = dist.find_config_files()
+            dist.parse_config_files(cfgfiles)
+            try:
+                ok = dist.parse_command_line()
+            except DistutilsArgError:
+                raise
+            assert ok
+
+            obj_build_ext = dist.get_command_obj("build_ext")
+            dist.run_commands()
+            staged_compiled_path = Path(obj_build_ext.get_outputs()[0])
+            if obj_build_ext.inplace:
+                staged_compiled_path = Path(
+                    staged_source_path.parent / os.path.basename(staged_compiled_path)
+                )
+            
             target_compiled_path = source_path.parent / staged_compiled_path.name
             _atomic_copy2(staged_compiled_path, target_compiled_path)
             staged_c_path = staged_source_path.with_suffix(".c")
@@ -510,6 +570,12 @@ def _load_or_compile_generated_module(
         finally:
             if cleanup_build_dir:
                 shutil.rmtree(module_build_dir, ignore_errors=True)
+            shutil.rmtree(stage_root, ignore_errors=True)
+            stage_parent = stage_root.parent
+            try:
+                stage_parent.rmdir()
+            except OSError:
+                pass
 
     helper_module = sys.modules.get("cydr._every_supported_cython")
     if helper_module is not None:
