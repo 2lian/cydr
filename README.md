@@ -4,10 +4,10 @@
 |---|:---|:---:|
 | [![python](https://img.shields.io/badge/Python-3.10--3.14-%20blue?logo=python&logoColor=white)](./pyproject.toml) <br> [![numpy](https://img.shields.io/badge/NumPy-1.26%20%7C%202.x-%20blue?logo=numpy&logoColor=white)](./pixi.toml) <br> [![mit](https://img.shields.io/badge/License-MIT-gold)](https://opensource.org/license/mit) | [![linux](https://img.shields.io/badge/OS-Linux-black?logo=linux&logoColor=white)](./pixi.toml) <br> [![windows](https://img.shields.io/badge/OS-Windows-black?logo=windows)](./pixi.toml) <br> [![macos](https://img.shields.io/badge/OS-macOS-black?logo=apple)](./pixi.toml) <br> [![xcdr1](https://img.shields.io/badge/Wire-XCDR1-blue)](./README.md#runtime-conventions) | Python: `3.10`, `3.11`, `3.12`, `3.13`, `3.14` <br> NumPy: `1.26`, `2.x`<br> [![Tests](https://github.com/2lian/cydr/actions/workflows/tests.yml/badge.svg)](https://github.com/2lian/cydr/actions/workflows/tests.yml)|
 
-`cydr` is a fast, opinionated `XCDR1` serializer and deserializer for Python. At runtime, it dynamically generates a small Cython codec for your schema, compiles it down to C and uses it to (de)serialize payloads. There is no compilation step for the user, we do it Just In Time using Cython.
+`cydr` is a fast, pythonic, opinionated `XCDR1` (de)serializer and IDL for Python, with just in time (JIT) compilation! After defining your message schema simply with a python class, `cydr` generates a Cython codec, and compiles it down to C for BlAzInGlY fast performances.
 
 > [!NOTE]
-> `cydr` compiles generated Cython modules at runtime, so a working local C compiler toolchain is required.
+> A working C compiler toolchain is required at runtime.
 
 Priorities:
 
@@ -17,21 +17,22 @@ Priorities:
 
 Runnable examples:
 
-- [`examples/roundtrip_custom_message.py`](examples/roundtrip_custom_message.py) for the low-level nested-dict interface
-- [`examples/roundtrip_xcdrstruct_message.py`](examples/roundtrip_xcdrstruct_message.py) for the higher-level `XcdrStruct` interface
+- [`examples/roundtrip_custom_message.py`](examples/roundtrip_custom_message.py) for the minimal low-level nested-dict interface
+- [`examples/roundtrip_xcdrstruct_message.py`](examples/roundtrip_xcdrstruct_message.py) for the higher-level `XcdrStruct` interface based on [`msgspec`](https://github.com/jcrist/msgspec)
 
 > [!WARNING]
 > `cydr` prioritizes speed and therefore supports only a focused subset of XCDR1: little-endian XCDR1, plain nested structs, and fixed arrays / sequences of scalars and strings.
 >
-> To stay fast, `cydr` is intentionally opinionated about runtime types. In particular, schema `string` means UTF-8 `bytes` at runtime, not Python `str`. The library does not do implicit string encoding or decoding for you.
+> To stay fast, `cydr` is exclusively based on numpy and opinionated about runtime types. In particular, schema `string` means UTF-8 `bytes` at runtime, not Python `str`.
 >
-> Current constraints:
-> - `string` fields are `bytes`, and string arrays / sequences are NumPy arrays with `np.bytes_` dtype
-> - arrays and sequences must be 1D NumPy arrays with the matching dtype
-> - string collections are much slower than numeric arrays, and large arrays / sequences of strings should be avoided if speed matters. One long `string` entry is fine.
->   - One `100 KB` `string` deserialized in about `2.83 us`, while `10,000` short strings totaling a similar byte volume took about `302.07 us`.
-> - arrays or sequences of nested schemas are not supported
-> - enums, unions, optionals, bounded strings, `char` / `wchar`, XCDR2 mutable or appendable encodings, and big-endian targets are not supported
+> Constraints:
+> - `string` fields are `bytes`, and string arrays / sequences are NumPy arrays with `np.bytes_` dtype. However this datastructure is not optimal for all applications, hence:
+>   - You can alternatively pass `list[bytes]` for encoding.
+>   - You can alternatively decode into `list[bytes]` or raw C representation.
+> - Arrays and sequences must be 1D NumPy arrays with the matching dtype
+> - Collections of strings are much slower than numeric arrays, thus large arrays / sequences of strings should be avoided if speed matters. One long `string` entry is fine.
+> - Collections of schemas are not supported, only collections of primitive types.
+> - Enums, unions, optionals, bounded strings, `char` / `wchar`, XCDR2 mutable or appendable encodings, and big-endian targets are not supported
 >
 > If you need anything outside this subset, use `cyclonedds_idl` directly. Contributions to extend our subset are however welcome!
 
@@ -65,7 +66,6 @@ Those benchmarks were performed on `JointState` messages containing 3 sequence o
 
 ```python
 from typing import Any
-
 import msgspec
 import numpy as np
 from nptyping import Bytes, Float64, NDArray
@@ -73,17 +73,18 @@ from nptyping import Bytes, Float64, NDArray
 from cydr.idl import XcdrStruct
 from cydr.types import int32, string, uint32
 
-
-class Stamp(XcdrStruct):
+# Define adn use your message schema using a simple python class
+# Type hints (`: int32` / `: uint32`) describe the cdr type of the field
+class Time(XcdrStruct):
     sec: int32 = np.int32(0)
     nanosec: uint32 = np.uint32(0)
 
-
+# Create more schemas using one you previously created
 class Header(XcdrStruct):
-    stamp: Stamp = msgspec.field(default_factory=Stamp)
+    stamp: Time = msgspec.field(default_factory=Stamp)
     frame_id: string = b""
 
-
+# And also define collections (arrays of set/varialbe length) using numpy and nptyping
 class JointState(XcdrStruct):
     header: Header = msgspec.field(default_factory=Header)
     name: NDArray[Any, Bytes] = msgspec.field(
@@ -99,8 +100,10 @@ class JointState(XcdrStruct):
         default_factory=lambda: np.array([], dtype=np.float64)
     )
 
-JointState.brew() # optional: forces caching and compilation of the schema
+# Optional: forces caching and compilation of the schema
+JointState.brew()
 
+# Instatiate a message with its nested components and arrays
 message = JointState(
     header=Header(
         stamp=Stamp(sec=np.int32(10), nanosec=np.uint32(123)),
@@ -110,6 +113,7 @@ message = JointState(
     position=np.array([1.0, 2.0], dtype=np.float64),
 )
 
+# Encode / Decode
 payload = message.serialize()
 decoded = JointState.deserialize(payload)
 ```
@@ -135,16 +139,8 @@ decoded = JointState.deserialize(payload)
 - `Sequence[Primitive]` -> `NDArray[Any, dtype]` defines a variable-length 1D collection of one primitive dtype.
 - `Array[n, Primitive]` -> `NDArray[Shape["n"], dtype]` defines a fixed-length 1D collection of one primitive dtype.
 - `Sequence[string]` -> `NDArray[Any, Bytes]` Represent a collection of strings with a numpy array of `np.bytes_` by default.
-  - When deserializing you can choose the representation using the Enum `StringCollectionMode`. `.LIST` mode (`list[bytes]`) is more performant from small arrays, or you can use the most performant `.RAW` mode, to manipulate a C wrapper directly.
+  - When deserializing you can choose the representation using the Enum `StringCollectionMode`. `.LIST` mode (`list[bytes]`) is more performant from small arrays, or you can use the most performant `.RAW` mode, to manipulate a `list` like C wrapper directly.
   - When serializing, you can either pass `list[bytes]` or `array[np.bytes_]`
-
-## Runtime Conventions
-
-- Keys are ignored when calling the (de)serializers.
-- Ordering of schema entries is what dictates the codec.
-- Deserializers rebuild messages using the schema shape provided at their creation.
-
-This means schema order and runtime value order must match. We do not verify the data as it is an expensive operation when talking ~2us in python (creating the Struct object actually takes longer than the codec at those speed)
 
 ## Cache
 
@@ -196,4 +192,3 @@ Generated codecs are cached by the hash of the flattened field-type sequence.
 | `string` | `scalar` | `small` | 16 | 25 | 0.41 | 0.66 | 2.58 | 0.82 | 0.72 | 2.44 |
 | `string` | `scalar` | `big` | 10000 | 10009 | 0.56 | 0.84 | 3.97 | 0.86 | 0.82 | 3.56 |
 | `string` | `array` | `small` | 16 | 385 | 0.53 | 0.78 | 13.60 | 1.48 | 1.52 | 13.50 |
-| `string` | `array` | `big` | 250000 | 2502000001 | 968083.78 | 969586.07 | 4387828.77 | 459644.93 | 457855.89 | 1765190.79 |
