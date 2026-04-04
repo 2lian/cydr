@@ -21,6 +21,7 @@ import Cython
 import numpy as np
 import pyximport
 import pyximport.pyximport as pyximport_runtime
+from pyximport import pyxbuild
 
 from .cython_generator import generate_cython_codec_module_source
 from .schema_types import (
@@ -88,7 +89,6 @@ _BUILD_PATH_KEY_LENGTH = 6 if _IS_WINDOWS else 8
 _COMPILED_MODULE_RETRY_DELAY_SECONDS = 0.05
 _ENV_DIR_PREFIX = "" if _IS_WINDOWS else "env_"
 _SERIALIZER_PREFIX = "s"
-_PYXBUILD_ROOT_NAME = "b" if _IS_WINDOWS else "cydr_pyxbld"
 
 
 def _stable_json_dumps(value: object) -> str:
@@ -197,13 +197,6 @@ def _load_compiled_module(module_name: str, compiled_path: Path):
         sys.modules.pop(module_name, None)
         raise
     return module
-
-
-def _pyxbuild_root(environment_key: str) -> Path:
-    return Path(tempfile.gettempdir()) / _PYXBUILD_ROOT_NAME / _short_cache_key(
-        environment_key,
-        _ENV_PATH_KEY_LENGTH,
-    )
 
 
 def _resolve_cache_dir() -> Path:
@@ -403,6 +396,42 @@ def _load_or_compile_generated_module(
     shadow_package_dir = _ensure_shadow_backend_package(cache_dir)
     pyxbuild_dir.mkdir(parents=True, exist_ok=True)
 
+    def build_inplace(
+        source_path: Path,
+        module_name: str,
+        *,
+        force_rebuild: bool = False,
+        reload_support: bool = False,
+    ) -> Path:
+        build_temp_dir = pyxbuild_dir / (
+            f"temp.{sysconfig.get_platform()}-{sys.implementation.cache_tag}"
+        )
+        source_path = source_path if source_path.is_absolute() else source_path.absolute()
+        build_source_parts = source_path.parts[1:] if source_path.anchor else source_path.parts
+        build_temp_dir.joinpath(*build_source_parts[:-1]).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        extension_mod, setup_args = pyximport_runtime.get_distutils_extension(
+            module_name,
+            str(source_path),
+            language_level=3,
+        )
+        all_setup_args = pyximport_runtime.pyxargs.setup_args.copy()
+        all_setup_args.update(setup_args)
+        return Path(
+            pyxbuild.pyx_to_dll(
+                str(source_path),
+                extension_mod,
+                force_rebuild=int(force_rebuild),
+                build_in_temp=pyximport_runtime.pyxargs.build_in_temp,
+                pyxbuild_dir=str(pyxbuild_dir),
+                setup_args=all_setup_args,
+                reload_support=reload_support or pyximport_runtime.pyxargs.reload_support,
+                inplace=True,
+            )
+        )
+
     helper_module = sys.modules.get("cydr._every_supported_cython")
     if helper_module is not None:
         helper_path = getattr(helper_module, "__file__", None)
@@ -412,6 +441,10 @@ def _load_or_compile_generated_module(
         ):
             sys.modules.pop("cydr._every_supported_cython", None)
         else:
+            helper_missing_api = not hasattr(
+                helper_module,
+                "DecodedStringCollection",
+            )
             helper_source_path = cache_helper_dir / "_every_supported_cython.pyx"
             try:
                 helper_is_stale = (
@@ -420,7 +453,7 @@ def _load_or_compile_generated_module(
                 )
             except OSError:
                 helper_is_stale = True
-            if helper_is_stale:
+            if helper_is_stale or helper_missing_api:
                 sys.modules.pop("cydr._every_supported_cython", None)
 
     # First make the shared Cython backend importable from the cache.
@@ -453,14 +486,9 @@ def _load_or_compile_generated_module(
                 helper_needs_rebuild = True
 
         if helper_needs_rebuild:
-            helper_compiled_path = Path(
-                pyximport_runtime.build_module(
-                    helper_module_name,
-                    str(helper_source_path),
-                    pyxbuild_dir=str(pyxbuild_dir),
-                    inplace=True,
-                    language_level=3,
-                )
+            helper_compiled_path = build_inplace(
+                helper_source_path,
+                helper_module_name,
             )
         try:
             helper_module = _load_compiled_module(
@@ -480,6 +508,29 @@ def _load_or_compile_generated_module(
                 helper_compiled_path,
             )
 
+        real_package = sys.modules.get("cydr")
+        if real_package is not None:
+            setattr(real_package, "_every_supported_cython", helper_module)
+
+        if not hasattr(helper_module, "DecodedStringCollection"):
+            helper_compiled_path = build_inplace(
+                helper_source_path,
+                helper_module_name,
+                force_rebuild=True,
+                reload_support=True,
+            )
+            helper_module = _load_compiled_module(
+                helper_module_name,
+                helper_compiled_path,
+            )
+            if real_package is not None:
+                setattr(real_package, "_every_supported_cython", helper_module)
+            if not hasattr(helper_module, "DecodedStringCollection"):
+                raise ImportError(
+                    "cydr._every_supported_cython did not expose "
+                    "DecodedStringCollection after rebuild"
+                )
+
     # Reuse an already-compiled extension module when it exists.
     compiled_path = _compiled_extension_path(cache_dir, module_name)
     if compiled_path is not None:
@@ -492,25 +543,25 @@ def _load_or_compile_generated_module(
                 raise
             return _load_compiled_module(module_name, compiled_path)
 
-    # Otherwise import the generated .pyx and let pyximport compile it.
-    sys.path.insert(0, str(cache_dir))
-    importlib.invalidate_caches()
+    # Otherwise compile the generated .pyx explicitly and load the resulting extension.
+    source_path = cache_dir / f"{module_name}.pyx"
     try:
-        return importlib.import_module(module_name)
+        compiled_path = build_inplace(
+            source_path,
+            module_name,
+        )
+        return _load_compiled_module(module_name, compiled_path)
     except Exception:
         sys.modules.pop(module_name, None)
         time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
-        importlib.invalidate_caches()
         compiled_path = _compiled_extension_path(cache_dir, module_name)
         if compiled_path is not None:
             return _load_compiled_module(module_name, compiled_path)
-        try:
-            return importlib.import_module(module_name)
-        except Exception:
-            sys.modules.pop(module_name, None)
-            raise
-    finally:
-        sys.path.remove(str(cache_dir))
+        compiled_path = build_inplace(
+            source_path,
+            module_name,
+        )
+        return _load_compiled_module(module_name, compiled_path)
 
 
 def _wrap_schema_call(
@@ -658,7 +709,7 @@ def _load_generated_codec(
         _ENV_PATH_KEY_LENGTH,
     )
     resolved_cache_dir = CYDR_CACHE_DIR / f"{_ENV_DIR_PREFIX}{environment_path_key}"
-    resolved_pyxbuild_dir = _pyxbuild_root(environment_key)
+    resolved_pyxbuild_dir = resolved_cache_dir / "_pyxbld"
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
 
     flattened_fields = flatten_schema_fields(schema)
