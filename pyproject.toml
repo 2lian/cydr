@@ -10,15 +10,14 @@ version = "0.1.0"
 description = "A fast, pythonic, focused XCDR1 serializer/deserializer for Python with a schema API and just-in-time compilation."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
-    { name = "Elian Neppel" },
+  { name = "Elian NEPPEL", email = "elian.dev@posteo.com" }
 ]
-keywords = ["cdr", "xcdr", "cyclonedds", "cython", "serialization"]
+keywords = ["cdr", "xcdr", "cython", "codec", "serialization"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
@@ -31,6 +30,8 @@ classifiers = [
     "Programming Language :: Cython",
     "Topic :: Software Development :: Code Generators",
     "Topic :: System :: Networking",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
 dependencies = [
     "Cython>=3.0,<4",

@@ -4730,7 +4730,7 @@ packages:
 - pypi: ./
   name: cydr
   version: 0.1.0
-  sha256: f4c30e798413006d6c5a06486327006a34a3349622ef36f624f23fbd9571c377
+  sha256: 4cb2705fd7a853f92b0b5358c2d5e0f8cbb2b8a48aed6bceb87bd1c5f321e392
   requires_dist:
   - cython>=3.0,<4
   - msgspec>=0.20.0,<1
