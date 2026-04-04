@@ -9,9 +9,11 @@ import shutil
 import sys
 import sysconfig
 import tempfile
+import threading
 import time
 import warnings
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import IntEnum
 from importlib.machinery import EXTENSION_SUFFIXES
@@ -89,6 +91,7 @@ _BUILD_PATH_KEY_LENGTH = 6 if _IS_WINDOWS else 8
 _COMPILED_MODULE_RETRY_DELAY_SECONDS = 0.05
 _ENV_DIR_PREFIX = "" if _IS_WINDOWS else "env_"
 _SERIALIZER_PREFIX = "s"
+_HELPER_BUILD_LOCK = threading.RLock()
 
 
 def _stable_json_dumps(value: object) -> str:
@@ -180,6 +183,52 @@ def _write_text_if_changed(path: Path, content: str, encoding: str = "utf-8") ->
     if path.exists() and path.read_text(encoding=encoding) == content:
         return
     _atomic_write_text(path, content, encoding=encoding)
+
+
+def _atomic_copy2(source_path: Path, target_path: Path) -> None:
+    """Copy a file into place via a same-directory temp file and atomic replace."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path_str = tempfile.mkstemp(
+        dir=str(target_path.parent),
+        prefix=f".{target_path.name}.",
+        suffix=".tmp",
+    )
+    temp_path = Path(temp_path_str)
+    os.close(fd)
+    try:
+        shutil.copy2(source_path, temp_path)
+        os.replace(temp_path, target_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+@contextmanager
+def _build_lock(lock_path: Path):
+    """Acquire one filesystem lock file, waiting until it becomes available."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
+            continue
+        break
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "pid": os.getpid(),
+                    "time_ns": time.time_ns(),
+                },
+                handle,
+                ensure_ascii=True,
+            )
+            handle.write("\n")
+        yield
+    finally:
+        lock_path.unlink(missing_ok=True)
 
 
 def _load_compiled_module(module_name: str, compiled_path: Path):
@@ -333,35 +382,31 @@ def _ensure_shadow_backend_package(cache_dir: Path) -> Path:
 
     for filename in _HELPER_BACKEND_FILES:
         source_path = _PACKAGE_DIR / filename
-        target_path = shadow_package_dir / filename
-        try:
-            if target_path.exists() and target_path.resolve() == source_path.resolve():
-                continue
-        except OSError:
-            pass
+        if source_path.stat().st_size == 0:
+            raise ImportError(
+                f"cydr helper backend file is empty: {source_path}"
+            )
 
+        target_path = shadow_package_dir / filename
         if target_path.is_symlink():
-            try:
-                if target_path.resolve() == source_path.resolve():
-                    continue
-            except OSError:
-                pass
             target_path.unlink()
 
         if target_path.exists():
             try:
-                shutil.copy2(source_path, target_path)
-            except shutil.SameFileError:
-                continue
-            continue
+                source_stat = source_path.stat()
+                target_stat = target_path.stat()
+                if (
+                    target_stat.st_size == source_stat.st_size
+                    and target_stat.st_mtime_ns == source_stat.st_mtime_ns
+                ):
+                    continue
+            except OSError:
+                pass
 
-        try:
-            target_path.symlink_to(source_path)
-        except OSError:
-            try:
-                shutil.copy2(source_path, target_path)
-            except shutil.SameFileError:
-                continue
+        shutil.copy2(source_path, target_path)
+
+    for stale_path in cache_dir.glob("_every_supported_cython*.reload*"):
+        stale_path.unlink(missing_ok=True)
 
     return shadow_package_dir
 
@@ -401,36 +446,70 @@ def _load_or_compile_generated_module(
         module_name: str,
         *,
         force_rebuild: bool = False,
-        reload_support: bool = False,
     ) -> Path:
-        build_temp_dir = pyxbuild_dir / (
-            f"temp.{sysconfig.get_platform()}-{sys.implementation.cache_tag}"
-        )
         source_path = source_path if source_path.is_absolute() else source_path.absolute()
-        build_source_parts = source_path.parts[1:] if source_path.anchor else source_path.parts
-        build_temp_dir.joinpath(*build_source_parts[:-1]).mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        module_build_dir = pyxbuild_dir / module_name.replace(".", "_")
+        stage_root = module_build_dir / "src"
+        stage_root.mkdir(parents=True, exist_ok=True)
+
+        if module_name == "cydr._every_supported_cython":
+            staged_source_path = stage_root / "cydr" / source_path.name
+            staged_source_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(shadow_package_dir / "__init__.py", staged_source_path.parent / "__init__.py")
+            shutil.copy2(shadow_package_dir / "_every_supported_cython.pyx", staged_source_path.parent / "_every_supported_cython.pyx")
+            shutil.copy2(shadow_package_dir / "_every_supported_cython.pxd", staged_source_path.parent / "_every_supported_cython.pxd")
+        else:
+            staged_source_path = stage_root / source_path.name
+            shutil.copy2(source_path, staged_source_path)
+            staged_helper_dir = stage_root / "cydr"
+            staged_helper_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(shadow_package_dir / "__init__.py", staged_helper_dir / "__init__.py")
+            shutil.copy2(shadow_package_dir / "_every_supported_cython.pyx", staged_helper_dir / "_every_supported_cython.pyx")
+            shutil.copy2(shadow_package_dir / "_every_supported_cython.pxd", staged_helper_dir / "_every_supported_cython.pxd")
+
         extension_mod, setup_args = pyximport_runtime.get_distutils_extension(
             module_name,
-            str(source_path),
+            str(staged_source_path),
             language_level=3,
         )
         all_setup_args = pyximport_runtime.pyxargs.setup_args.copy()
         all_setup_args.update(setup_args)
-        return Path(
-            pyxbuild.pyx_to_dll(
-                str(source_path),
-                extension_mod,
-                force_rebuild=int(force_rebuild),
-                build_in_temp=pyximport_runtime.pyxargs.build_in_temp,
-                pyxbuild_dir=str(pyxbuild_dir),
-                setup_args=all_setup_args,
-                reload_support=reload_support or pyximport_runtime.pyxargs.reload_support,
-                inplace=True,
+        include_dirs = all_setup_args.get("include_dirs", [])
+        if isinstance(include_dirs, str):
+            include_dirs = [include_dirs]
+        else:
+            include_dirs = list(include_dirs)
+        all_setup_args["include_dirs"] = [str(stage_root), *include_dirs]
+        cleanup_build_dir = True
+        try:
+            staged_compiled_path = Path(
+                pyxbuild.pyx_to_dll(
+                    str(staged_source_path),
+                    extension_mod,
+                    force_rebuild=int(force_rebuild),
+                    build_in_temp=False,
+                    pyxbuild_dir=str(module_build_dir),
+                    setup_args=all_setup_args,
+                    reload_support=False,
+                    inplace=True,
+                )
             )
-        )
+            target_compiled_path = source_path.parent / staged_compiled_path.name
+            _atomic_copy2(staged_compiled_path, target_compiled_path)
+            staged_c_path = staged_source_path.with_suffix(".c")
+            if staged_c_path.exists():
+                _atomic_copy2(staged_c_path, source_path.with_suffix(".c"))
+            return target_compiled_path
+        except PermissionError:
+            # On Windows a loaded extension may not be replaceable in-place.
+            cleanup_build_dir = False
+            staged_c_path = staged_source_path.with_suffix(".c")
+            if staged_c_path.exists():
+                _atomic_copy2(staged_c_path, source_path.with_suffix(".c"))
+            return staged_compiled_path
+        finally:
+            if cleanup_build_dir:
+                shutil.rmtree(module_build_dir, ignore_errors=True)
 
     helper_module = sys.modules.get("cydr._every_supported_cython")
     if helper_module is not None:
@@ -458,78 +537,80 @@ def _load_or_compile_generated_module(
 
     # First make the shared Cython backend importable from the cache.
     if "cydr._every_supported_cython" not in sys.modules:
-        helper_module_name = "cydr._every_supported_cython"
-        helper_source_path = shadow_package_dir / "_every_supported_cython.pyx"
-        helper_compiled_path = _compiled_extension_path(
-            shadow_package_dir,
-            "_every_supported_cython",
-        )
-
-        global _PYXIMPORT_READY
-        if not _PYXIMPORT_READY:
-            pyximport.install(
-                build_dir=str(pyxbuild_dir),
-                language_level=3,
-                inplace=True,
-                setup_args={"include_dirs": np.get_include()},
-            )
-            _PYXIMPORT_READY = True
-
-        helper_needs_rebuild = helper_compiled_path is None
-        if not helper_needs_rebuild:
-            try:
-                helper_needs_rebuild = (
-                    helper_source_path.stat().st_mtime_ns
-                    > helper_compiled_path.stat().st_mtime_ns
+        with _HELPER_BUILD_LOCK:
+            helper_module = sys.modules.get("cydr._every_supported_cython")
+            if helper_module is None:
+                helper_module_name = "cydr._every_supported_cython"
+                helper_source_path = shadow_package_dir / "_every_supported_cython.pyx"
+                helper_lock_path = cache_dir / f"{helper_module_name}.lock"
+                helper_compiled_path = _compiled_extension_path(
+                    shadow_package_dir,
+                    "_every_supported_cython",
                 )
-            except OSError:
-                helper_needs_rebuild = True
 
-        if helper_needs_rebuild:
-            helper_compiled_path = build_inplace(
-                helper_source_path,
-                helper_module_name,
-            )
-        try:
-            helper_module = _load_compiled_module(
-                helper_module_name,
-                helper_compiled_path,
-            )
-        except Exception:
-            time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
-            helper_compiled_path = _compiled_extension_path(
-                shadow_package_dir,
-                "_every_supported_cython",
-            )
-            if helper_compiled_path is None:
-                raise
-            helper_module = _load_compiled_module(
-                helper_module_name,
-                helper_compiled_path,
-            )
+                global _PYXIMPORT_READY
+                if not _PYXIMPORT_READY:
+                    pyximport.install(
+                        build_dir=str(pyxbuild_dir),
+                        language_level=3,
+                        inplace=True,
+                        setup_args={"include_dirs": np.get_include()},
+                    )
+                    _PYXIMPORT_READY = True
 
-        real_package = sys.modules.get("cydr")
-        if real_package is not None:
-            setattr(real_package, "_every_supported_cython", helper_module)
+                with _build_lock(helper_lock_path):
+                    helper_compiled_path = _compiled_extension_path(
+                        shadow_package_dir,
+                        "_every_supported_cython",
+                    )
+                    helper_needs_rebuild = helper_compiled_path is None
+                    if not helper_needs_rebuild:
+                        try:
+                            helper_needs_rebuild = (
+                                helper_source_path.stat().st_mtime_ns
+                                > helper_compiled_path.stat().st_mtime_ns
+                            )
+                        except OSError:
+                            helper_needs_rebuild = True
 
-        if not hasattr(helper_module, "DecodedStringCollection"):
-            helper_compiled_path = build_inplace(
-                helper_source_path,
-                helper_module_name,
-                force_rebuild=True,
-                reload_support=True,
-            )
-            helper_module = _load_compiled_module(
-                helper_module_name,
-                helper_compiled_path,
-            )
-            if real_package is not None:
-                setattr(real_package, "_every_supported_cython", helper_module)
-            if not hasattr(helper_module, "DecodedStringCollection"):
-                raise ImportError(
-                    "cydr._every_supported_cython did not expose "
-                    "DecodedStringCollection after rebuild"
-                )
+                    if helper_needs_rebuild:
+                        helper_compiled_path = build_inplace(
+                            helper_source_path,
+                            helper_module_name,
+                        )
+
+                    helper_module = None
+                    if helper_compiled_path is not None:
+                        try:
+                            helper_module = _load_compiled_module(
+                                helper_module_name,
+                                helper_compiled_path,
+                            )
+                        except Exception:
+                            helper_module = None
+
+                    if helper_module is None or not hasattr(
+                        helper_module,
+                        "DecodedStringCollection",
+                    ):
+                        helper_compiled_path = build_inplace(
+                            helper_source_path,
+                            helper_module_name,
+                            force_rebuild=True,
+                        )
+                        helper_module = _load_compiled_module(
+                            helper_module_name,
+                            helper_compiled_path,
+                        )
+                        if not hasattr(helper_module, "DecodedStringCollection"):
+                            raise ImportError(
+                                "cydr._every_supported_cython did not expose "
+                                "DecodedStringCollection after rebuild"
+                            )
+
+                real_package = sys.modules.get("cydr")
+                if real_package is not None:
+                    setattr(real_package, "_every_supported_cython", helper_module)
 
     # Reuse an already-compiled extension module when it exists.
     compiled_path = _compiled_extension_path(cache_dir, module_name)
@@ -545,23 +626,30 @@ def _load_or_compile_generated_module(
 
     # Otherwise compile the generated .pyx explicitly and load the resulting extension.
     source_path = cache_dir / f"{module_name}.pyx"
+    lock_path = cache_dir / f"{module_name}.lock"
     try:
-        compiled_path = build_inplace(
-            source_path,
-            module_name,
-        )
-        return _load_compiled_module(module_name, compiled_path)
+        with _build_lock(lock_path):
+            compiled_path = _compiled_extension_path(cache_dir, module_name)
+            if compiled_path is None:
+                compiled_path = build_inplace(
+                    source_path,
+                    module_name,
+                )
+            return _load_compiled_module(module_name, compiled_path)
     except Exception:
         sys.modules.pop(module_name, None)
         time.sleep(_COMPILED_MODULE_RETRY_DELAY_SECONDS)
         compiled_path = _compiled_extension_path(cache_dir, module_name)
         if compiled_path is not None:
             return _load_compiled_module(module_name, compiled_path)
-        compiled_path = build_inplace(
-            source_path,
-            module_name,
-        )
-        return _load_compiled_module(module_name, compiled_path)
+        with _build_lock(lock_path):
+            compiled_path = _compiled_extension_path(cache_dir, module_name)
+            if compiled_path is None:
+                compiled_path = build_inplace(
+                    source_path,
+                    module_name,
+                )
+            return _load_compiled_module(module_name, compiled_path)
 
 
 def _wrap_schema_call(
