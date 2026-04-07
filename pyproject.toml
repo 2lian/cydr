@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cydr"
-version = "0.1.2"
+version = "0.1.4"
 description = "A fast, pythonic, focused XCDR1 serializer/deserializer for Python with a schema API and just-in-time compilation."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,6 +38,7 @@ dependencies = [
     "msgspec>=0.20.0,<1",
     "numpy>=1.26,<3",
     "np2typing>=2.6.3,<3",
+    "setuptools",
 ]
 
 [project.optional-dependencies]

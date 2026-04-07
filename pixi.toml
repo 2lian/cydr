@@ -3,7 +3,7 @@ authors = ["Neppel Elian <elian.dev@posteo.com>"]
 channels = ["conda-forge"]
 name = "cydr"
 platforms = ["linux-64", "win-64", "osx-64", "osx-arm64", "linux-aarch64"]
-version = "0.1.2"
+version = "0.1.4"
 
 [environments]
 default = { features = ["py312", "np1"], solve-group = "py312-np1" }
@@ -53,4 +53,3 @@ numpy = "2.*"
 [pypi-dependencies]
 cyclonedds-idl = ">=0.1.0, <0.2"
 cydr = { path = ".", editable = true }
-np2typing = ">=2.6.3,<3"
