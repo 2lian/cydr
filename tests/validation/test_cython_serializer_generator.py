@@ -461,21 +461,22 @@ def test_codec_serialize_accepts_list_bytes_for_string_collections() -> None:
     assert generated_bytes == cyclone_bytes
 
 
-def test_deserializer_accepts_trailing_alignment_padding() -> None:
+@pytest.mark.parametrize("pad", [1, 2, 3, 4, 5, 6, 7])
+def test_deserializer_accepts_trailing_alignment_padding(pad: int) -> None:
     schema = {"value": uint8}
     codec = get_codec_for(schema)
     payload = bytes(codec.serialize({"value": np.uint8(0x5E)}))
-    padded_payload = payload + b"\xAA\x00\x00"
+    padded_payload = payload + b"\x00" * pad
 
     decoded = codec.deserialize(padded_payload)
 
     assert int(decoded["value"]) == 0x5E
 
 
-def test_deserializer_rejects_non_padding_trailing_bytes() -> None:
+def test_deserializer_rejects_trailing_bytes_beyond_max_alignment() -> None:
     schema = {"value": uint8}
     codec = get_codec_for(schema)
     payload = bytes(codec.serialize({"value": np.uint8(0x5E)}))
 
     with np.testing.assert_raises(ValueError):
-        codec.deserialize(payload + b"\xAA")
+        codec.deserialize(payload + b"\x00" * 8)

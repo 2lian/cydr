@@ -272,9 +272,8 @@ cdef inline void require_consumed(
     Py_ssize_t pos,
 ) except *:
     cdef Py_ssize_t length = data.shape[0]
-    if pos == length:
-        return
-    if round_up_to_alignment(pos, 4) == length:
+    cdef Py_ssize_t remaining = length - pos
+    if 0 <= remaining < CDR_ALIGN_MAX:
         return
     raise ValueError("Trailing bytes after deserializing.")
 
