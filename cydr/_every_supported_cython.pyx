@@ -271,11 +271,8 @@ cdef inline void require_consumed(
     const unsigned char[::1] data,
     Py_ssize_t pos,
 ) except *:
-    cdef Py_ssize_t length = data.shape[0]
-    cdef Py_ssize_t remaining = length - pos
-    if 0 <= remaining < CDR_ALIGN_MAX:
-        return
-    raise ValueError("Trailing bytes after deserializing.")
+    if pos > data.shape[0]:
+        raise ValueError("Deserialized past end of buffer.")
 
 
 cdef inline void validate_encapsulation_header(
